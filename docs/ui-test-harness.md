@@ -13,8 +13,8 @@ Example:
 ```
 driver.ClickButton("btnLoadSong")
 driver.SetText("txtSongBPM", "120")
-driver.OpenMenu("File")
-driver.SelectMenuItem("Import Map")
+driver.SendKeyboardShortcut("Alt+F")
+driver.ClickButton("miImportMap")
 ```
 
 The same tests must run against:

@@ -1,6 +1,6 @@
-# Platform‑Agnostic UI Test Harness
+# Platform-Agnostic UI Test Harness
 
-To safely migrate the Edda UI from WPF to Avalonia, a **platform‑agnostic UI test harness** must validate that both implementations behave identically.
+To safely migrate the Edda UI from WPF to Avalonia, a **platform-agnostic UI test harness** must validate that both implementations behave identically.
 
 The harness acts as the specification of UI behavior.
 

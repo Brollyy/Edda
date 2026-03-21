@@ -1,0 +1,18 @@
+model = "gpt-5-codex"
+model_reasoning_effort = "high"
+project_root_markers = [".git"]
+project_doc_fallback_filenames = ["AGENTS.md"]
+
+[env]
+DOTNET_CLI_TELEMETRY_OPTOUT = "1"
+DOTNET_NOLOGO = "1"
+NUGET_XMLDOC_MODE = "skip"
+
+[shell_environment_policy]
+inherit = "core"
+
+[profiles.default]
+model_reasoning_effort = "high"
+
+[profiles.fast]
+model_reasoning_effort = "medium"

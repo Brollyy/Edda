@@ -1,132 +1,40 @@
-# Platform-Agnostic UI Test Harness
+# UI Migration Test Strategy
 
-To safely migrate the Edda UI from WPF to Avalonia, a **platform-agnostic UI test harness** must validate that both implementations behave identically.
+For now, the migration effort uses two independent UI test projects instead of a shared scenario harness:
 
-The harness acts as the specification of UI behavior.
+- `tests/Edda.Wpf.UI.Tests`
+- `tests/Edda.Avalonia.UI.Tests`
 
-## Core idea
+## Why this approach
 
-Tests interact with the UI through a **UI driver interface** rather than directly referencing framework controls.
+The WPF and Avalonia UI layers will not be identical during migration. Keeping tests separate avoids forcing a shared test contract too early and allows each project to evolve at its own pace.
 
-Example:
+## Current testing model
 
-```
-driver.ClickButton("btnLoadSong")
-driver.SetText("txtSongBPM", "120")
-driver.SendKeyboardShortcut("Alt+F")
-driver.ClickButton("miImportMap")
-```
+- WPF tests are the baseline checks against the existing application behavior.
+- Avalonia tests are separate and will be written/reworked as each migrated feature lands.
+- Assertions and control lookup details can differ between the two projects.
 
-The same tests must run against:
-
-- WPF UI implementation
-- Avalonia UI implementation
-
-## UI Driver contract
-
-Suggested interface:
-
-```
-public interface IUIDriver
-{
-    void ClickButton(string id);
-
-    void SetText(string id, string value);
-
-    string GetText(string id);
-
-    bool IsVisible(string id);
-
-    bool IsEnabled(string id);
-
-    void SelectDropdown(string id, string value);
-
-    void ToggleCheckbox(string id, bool value);
-
-    void Drag(string sourceId, string targetId);
-
-    void SendKeyboardShortcut(string shortcut);
-
-    void WaitForIdle();
-}
-```
-
-Each platform implements an adapter:
+Each project owns its own driver class:
 
 - `WpfUIDriver`
 - `AvaloniaUIDriver`
 
-## Test harness structure
+## Current scaffold status
 
-Recommended layout:
+- Both projects are configured as xUnit test projects and run via `dotnet test`.
+- Each project includes startup-focused tests:
+  - one active wiring test (`DriverCanBeCreated`)
+  - skipped behavioral tests that become active once the corresponding driver is implemented
 
-```
-tests/
+## Commands
 
-Edda.UI.Harness/
-    UIDriver.cs
-    UIScenario.cs
-    ScreenDefinitions/
-
-Edda.Wpf.UI.Tests/
-    WpfUIDriver.cs
-
-Edda.Avalonia.UI.Tests/
-    AvaloniaUIDriver.cs
+```bash
+dotnet test tests/Edda.Wpf.UI.Tests
+dotnet test tests/Edda.Avalonia.UI.Tests
 ```
 
-## Scenario-based tests
+Notes:
 
-Tests should describe user scenarios rather than individual control interactions.
-
-Example scenario:
-
-```
-LoadSongScenario
-
-1 open file dialog
-2 select song
-3 waveform appears
-4 timeline initialized
-5 playback enabled
-```
-
-These scenarios become the acceptance criteria for the migration.
-
-## Coverage expectations
-
-The harness must eventually cover:
-
-- editor startup
-- song loading
-- waveform generation
-- map editing interactions
-- timeline navigation
-- drum playback
-- settings editing
-- file import/export
-- autosave
-- keyboard shortcuts
-
-## Control identification
-
-All UI elements used by the harness must have stable identifiers.
-
-Example:
-
-```
-<Button x:Name="btnLoadSong" />
-<TextBox x:Name="txtSongBPM" />
-```
-
-Avalonia UI must preserve the same identifiers.
-
-## Success criteria
-
-Migration of a screen is considered complete when:
-
-1. All harness tests for that screen pass.
-2. The Avalonia driver behaves identically to the WPF driver.
-3. No behavior regressions are detected.
-
-This harness ensures that migration is validated against **behavior**, not just appearance.
+- WPF test execution requires Windows desktop runtime support.
+- On non-Windows environments, WPF tests may build but not execute.

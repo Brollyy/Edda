@@ -19,8 +19,8 @@ No production screen should be migrated until all of the following are true:
 
 1. The legacy WPF UI is isolated behind a dedicated project boundary.
 2. The screen and its behaviors have been inventoried.
-3. The expected behavior is represented in a platform-agnostic UI test harness.
-4. The harness can drive both the WPF and future Avalonia implementations through the same driver contract.
+3. Baseline behavior is covered by WPF UI tests in `tests/Edda.Wpf.UI.Tests/`.
+4. Matching Avalonia tests exist (or are tracked) in `tests/Edda.Avalonia.UI.Tests/` for migrated features.
 
 ## Recommended project split
 
@@ -44,14 +44,10 @@ Target structure:
   - Avalonia views
   - Avalonia resources
   - Avalonia-specific adapters
-- `tests/Edda.UI.Harness/`
-  - platform-agnostic UI expectations
-  - driver contract
-  - shared test scenarios
 - `tests/Edda.Wpf.UI.Tests/`
-  - WPF harness host and adapter
+  - WPF UI test suite and driver
 - `tests/Edda.Avalonia.UI.Tests/`
-  - Avalonia harness host and adapter
+  - Avalonia UI test suite and driver
 
 ## Required analysis pass
 
@@ -89,8 +85,8 @@ The first Avalonia PR should not be a visual port.
 The first implementation PR should instead:
 
 1. carve out the WPF project boundary
-2. introduce the shared UI driver contract
-3. add the first version of the platform-agnostic UI harness
+2. add baseline WPF UI tests for the targeted functionality
+3. scaffold separate Avalonia tests for the same functionality
 4. capture baseline expectations from the WPF application
 
 Only after this gate is complete should screen-by-screen migration begin.

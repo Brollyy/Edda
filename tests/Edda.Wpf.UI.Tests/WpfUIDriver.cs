@@ -1,7 +1,5 @@
-using Edda.UI.Harness;
-
 namespace Edda.Wpf.UI.Tests {
-    public class WpfUIDriver : IUIDriver {
+    public class WpfUIDriver {
         public void Launch() => throw new NotImplementedException("WpfUIDriver.Launch is not implemented yet.");
 
         public void Shutdown() => throw new NotImplementedException("WpfUIDriver.Shutdown is not implemented yet.");

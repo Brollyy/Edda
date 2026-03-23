@@ -1,7 +1,5 @@
-using Edda.UI.Harness;
-
 namespace Edda.Avalonia.UI.Tests {
-    public class AvaloniaUIDriver : IUIDriver {
+    public class AvaloniaUIDriver {
         public void Launch() => throw new NotImplementedException("AvaloniaUIDriver.Launch is not implemented yet.");
 
         public void Shutdown() => throw new NotImplementedException("AvaloniaUIDriver.Shutdown is not implemented yet.");

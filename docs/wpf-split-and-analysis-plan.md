@@ -78,6 +78,15 @@ The analysis pass should produce a living inventory for each screen with:
 - dependencies on services or background work
 - known timing-sensitive behavior
 
+## Current analysis scaffold
+
+The initial scaffold for this analysis is tracked in:
+
+- `docs/wpf-ui-analysis/README.md`
+- `docs/wpf-ui-analysis/window-feature-matrix.md`
+- `docs/wpf-ui-analysis/window-analysis-template.md`
+- `docs/wpf-ui-analysis/windows/`
+
 ## Migration gate
 
 The first Avalonia PR should not be a visual port.

@@ -1,0 +1,11 @@
+{
+  "_songName": "Fixture Song",
+  "_beatsPerMinute": "120",
+  "_environmentName": "Midgard",
+  "_explicit": "false",
+  "_songFilename": "song.ogg",
+  "_coverImageFilename": "cover.jpg",
+  "_beatmapFilenames": [
+    "easy.dat"
+  ]
+}

@@ -13,7 +13,7 @@ namespace Edda.Wpf.UI.Tests {
             Assert.NotNull(driver);
         }
 
-        [Fact(Skip = "Enable once WpfUIDriver launch/wait/element lookup is implemented.")]
+        [Fact]
         public void StartupWindowIsVisibleOnLaunch() {
             var driver = new WpfUIDriver();
 
@@ -26,7 +26,7 @@ namespace Edda.Wpf.UI.Tests {
             }
         }
 
-        [Fact(Skip = "Enable once WpfUIDriver launch/wait/element lookup is implemented.")]
+        [Fact]
         public void StartupActionsAreEnabled() {
             var driver = new WpfUIDriver();
 

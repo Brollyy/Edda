@@ -135,9 +135,10 @@ namespace Edda {
             string newMapFolder = Helper.ChooseNewMapFolder();
             if (newMapFolder != null) {
                 MainWindow main = new();
-                this.Close();
+                Application.Current.MainWindow = main;
                 // NOTE: the window must be shown first before any processing can be done
                 main.Show();
+                this.Close();
                 main.InitNewMap(newMapFolder);
             }
         }
@@ -148,9 +149,10 @@ namespace Edda {
                 return;
             }
             MainWindow main = new();
-            this.Close();
+            Application.Current.MainWindow = main;
             // NOTE: the window must be shown first before any processing can be done
             main.Show();
+            this.Close();
             try {
                 main.InitImportMap(importMapFolder);
             } catch (Exception ex) {
@@ -167,10 +169,16 @@ namespace Edda {
             if (folder == null) {
                 return;
             }
-            MainWindow main = new();
-            this.Close();
+            MainWindow main;
+            try {
+                main = new();
+            } catch (Exception) {
+                throw;
+            }
+            Application.Current.MainWindow = main;
             // NOTE: the window must be shown first before any processing can be done
             main.Show();
+            this.Close();
             try {
                 main.InitOpenMap(folder);
             } catch (Exception ex) {

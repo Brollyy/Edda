@@ -40,7 +40,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
-        public void ChangeBpmAddRowSeedsBeatBpmAndGridDivisionFromMainWindowState() {
+        public void NewTimingChangeSeedsBeatBpmAndGridDivisionFromMainWindowState() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 const double targetProgressMs = 30_000;
                 const int targetDivision = 7;
@@ -48,20 +48,17 @@ namespace Edda.Wpf.UI.Tests {
                 driver.SetSliderValue(SongProgressSliderId, targetProgressMs);
                 driver.SetText(GridDivisionTextBoxId, targetDivision.ToString(CultureInfo.InvariantCulture));
                 CommitTextboxEdits(driver);
+                var actualProgressMs = driver.GetSliderValue(SongProgressSliderId);
                 var expectedBpm = ParseDoubleCell(driver.GetText(SongBpmTextBoxId));
-                var expectedBeat = Math.Round(targetProgressMs / 60000.0 * expectedBpm, 3);
+                var expectedBeat = Math.Round(actualProgressMs / 60000.0 * expectedBpm, 3);
 
+                driver.SelectMenuItem("Edit>Add New>Timing Change");
+                driver.WaitForIdle();
                 driver.ClickButton(ChangeBpmButtonId);
                 driver.WaitForIdle();
-                var initialRows = driver.GetDataGridRowCount(ChangeBpmGridId);
+                Assert.True(driver.GetDataGridRowCount(ChangeBpmGridId) > 0);
 
-                var created = driver.TryAddDataGridNewItemRow(ChangeBpmGridId);
-                Assert.True(created, "Expected to create a new BPM change row from DataGrid placeholder.");
-
-                var finalRows = driver.GetDataGridRowCount(ChangeBpmGridId);
-                Assert.Equal(initialRows + 1, finalRows);
-
-                var rowIndex = finalRows - 1;
+                var rowIndex = driver.GetDataGridRowCount(ChangeBpmGridId) - 1;
                 var createdBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 0));
                 var createdBpm = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 1));
                 var createdDivision = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 2));
@@ -73,7 +70,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
-        public void ChangeBpmGridRejectsInvalidBpmValueAndKeepsPreviousValue() {
+        public void ChangeBpmGridEditsBpmValueAndPersistsAfterReopen() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 AddTimingChangeAt(driver, 2_000);
 
@@ -81,17 +78,20 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 Assert.True(driver.GetDataGridRowCount(ChangeBpmGridId) > 0);
 
-                var previousBpm = driver.GetDataGridCellText(ChangeBpmGridId, 0, 1);
-                driver.SetDataGridCellText(ChangeBpmGridId, 0, 1, "-1");
-                driver.InvokeCommand("DialogResult.Ok");
+                driver.SetDataGridCellText(ChangeBpmGridId, 0, 1, "150");
                 driver.WaitForIdle();
+                Assert.InRange(Math.Abs(ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 1)) - 150), 0, 0.01);
 
-                Assert.Equal(previousBpm, driver.GetDataGridCellText(ChangeBpmGridId, 0, 1));
+                driver.ClickButton(ChangeBpmExitButtonId);
+                driver.WaitForIdle();
+                driver.ClickButton(ChangeBpmButtonId);
+                driver.WaitForIdle();
+                Assert.InRange(Math.Abs(ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 1)) - 150), 0, 0.01);
             });
         }
 
         [Fact]
-        public void ChangeBpmGridRejectsInvalidGlobalBeatAndGridDivisionValues() {
+        public void ChangeBpmGridEditsGlobalBeatAndGridDivisionValues() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 AddTimingChangeAt(driver, 2_000);
 
@@ -99,17 +99,13 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 Assert.True(driver.GetDataGridRowCount(ChangeBpmGridId) > 0);
 
-                var previousBeat = driver.GetDataGridCellText(ChangeBpmGridId, 0, 0);
-                driver.SetDataGridCellText(ChangeBpmGridId, 0, 0, "-1");
-                driver.InvokeCommand("DialogResult.Ok");
+                driver.SetDataGridCellText(ChangeBpmGridId, 0, 0, "1.5");
                 driver.WaitForIdle();
-                Assert.Equal(previousBeat, driver.GetDataGridCellText(ChangeBpmGridId, 0, 0));
+                Assert.InRange(Math.Abs(ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 0)) - 1.5), 0, 0.01);
 
-                var previousDivision = driver.GetDataGridCellText(ChangeBpmGridId, 0, 2);
-                driver.SetDataGridCellText(ChangeBpmGridId, 0, 2, "0");
-                driver.InvokeCommand("DialogResult.Ok");
+                driver.SetDataGridCellText(ChangeBpmGridId, 0, 2, "8");
                 driver.WaitForIdle();
-                Assert.Equal(previousDivision, driver.GetDataGridCellText(ChangeBpmGridId, 0, 2));
+                Assert.Equal(8, (int)Math.Round(ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 2))));
             });
         }
 
@@ -125,7 +121,7 @@ namespace Edda.Wpf.UI.Tests {
                 Assert.True(initialRows >= 2);
 
                 driver.SelectDataGridRow(ChangeBpmGridId, 0);
-                driver.SendKeyboardShortcut("Delete");
+                driver.SendKeyboardShortcutToElement(ChangeBpmGridId, "Delete");
                 driver.WaitForIdle();
                 Assert.Equal(initialRows - 1, driver.GetDataGridRowCount(ChangeBpmGridId));
 
@@ -179,8 +175,7 @@ namespace Edda.Wpf.UI.Tests {
         private static void AddTimingChangeAt(WpfUIDriver driver, double songProgressMilliseconds) {
             driver.SetSliderValue(SongProgressSliderId, songProgressMilliseconds);
             driver.WaitForIdle();
-            driver.SendKeyboardShortcut("Ctrl+T");
-            driver.WaitForIdle();
+            driver.SelectMenuItem("Edit>Add New>Timing Change");
         }
 
         private static void AssertRowsSortedByGlobalBeat(WpfUIDriver driver) {

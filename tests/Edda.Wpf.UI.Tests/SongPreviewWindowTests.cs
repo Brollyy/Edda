@@ -20,11 +20,12 @@ namespace Edda.Wpf.UI.Tests {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 driver.SetSliderValue(SongProgressSliderId, 30_000);
                 driver.WaitForIdle();
+                var actualProgressMs = driver.GetSliderValue(SongProgressSliderId);
                 OpenPreview(driver);
 
                 Assert.True(driver.IsVisible(PreviewGenerateButtonId));
-                Assert.Equal("0", driver.GetText(PreviewStartMinId));
-                Assert.Equal("30", driver.GetText(PreviewStartSecId));
+                Assert.Equal(((int)(actualProgressMs / 1000) / 60).ToString(), driver.GetText(PreviewStartMinId));
+                Assert.Equal(((int)(actualProgressMs / 1000) % 60).ToString(), driver.GetText(PreviewStartSecId));
                 Assert.False(string.IsNullOrWhiteSpace(driver.GetText(PreviewEndMinId)));
                 Assert.False(string.IsNullOrWhiteSpace(driver.GetText(PreviewEndSecId)));
                 Assert.False(string.IsNullOrWhiteSpace(driver.GetText(PreviewFadeInId)));
@@ -74,8 +75,8 @@ namespace Edda.Wpf.UI.Tests {
 
                 var previousValue = driver.GetText(PreviewFadeInId);
                 driver.SetText(PreviewFadeInId, "-1");
-                driver.SetText(PreviewFadeOutId, driver.GetText(PreviewFadeOutId));
-                driver.InvokeCommand("DialogResult.Ok");
+                driver.SendKeyboardShortcutToWindow("Tab", SongPreviewWindowTitle);
+                driver.TryInvokeCommand("DialogResult.Ok");
                 driver.WaitForIdle();
 
                 Assert.Equal(previousValue, driver.GetText(PreviewFadeInId));
@@ -89,8 +90,8 @@ namespace Edda.Wpf.UI.Tests {
 
                 var previousValue = driver.GetText(PreviewStartSecId);
                 driver.SetText(PreviewStartSecId, "oops");
-                driver.SetText(PreviewFadeInId, driver.GetText(PreviewFadeInId));
-                driver.InvokeCommand("DialogResult.Ok");
+                driver.SendKeyboardShortcutToWindow("Tab", SongPreviewWindowTitle);
+                driver.TryInvokeCommand("DialogResult.Ok");
                 driver.WaitForIdle();
 
                 Assert.Equal(previousValue, driver.GetText(PreviewStartSecId));

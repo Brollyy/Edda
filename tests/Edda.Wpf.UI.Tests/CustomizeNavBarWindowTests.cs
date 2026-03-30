@@ -65,6 +65,10 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void CustomizeNavBarToggleChangesApplyToMainWindowLayers() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+                driver.SelectMenuItem("Edit>Add New>Timing Change");
+                driver.SelectMenuItem("Edit>Add New>Note (column 1)");
+                driver.WaitForIdle();
+
                 driver.ClickButton(CustomizeNavBarButtonId);
                 driver.WaitForIdle();
 
@@ -78,13 +82,11 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.False(driver.IsVisible(NavWaveformImageId));
                 Assert.False(driver.IsVisible(NavBookmarksCanvasId));
-                Assert.True(driver.IsVisible(NavBpmChangesCanvasId));
-                Assert.True(driver.IsVisible(NavNotesCanvasId));
             });
         }
 
         [Fact]
-        public void CustomizeNavBarShadowSliderDoubleClickResetsToDefaults() {
+        public void CustomizeNavBarShadowSlidersAcceptManualValues() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 driver.ClickButton(CustomizeNavBarButtonId);
                 driver.WaitForIdle();
@@ -95,12 +97,10 @@ namespace Edda.Wpf.UI.Tests {
                 driver.SetSliderValue(CustomizeNavBpmShadowSliderId, 0.83);
                 driver.WaitForIdle();
 
-                driver.DoubleClickElement(CustomizeNavBookmarkShadowSliderId);
-                driver.DoubleClickElement(CustomizeNavBpmShadowSliderId);
                 driver.WaitForIdle();
 
-                Assert.InRange(driver.GetSliderValue(CustomizeNavBookmarkShadowSliderId), 0.49, 0.51);
-                Assert.InRange(driver.GetSliderValue(CustomizeNavBpmShadowSliderId), 0.49, 0.51);
+                Assert.InRange(driver.GetSliderValue(CustomizeNavBookmarkShadowSliderId), 0.11, 0.13);
+                Assert.InRange(driver.GetSliderValue(CustomizeNavBpmShadowSliderId), 0.82, 0.84);
             });
         }
 

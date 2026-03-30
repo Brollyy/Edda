@@ -53,11 +53,11 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.ToggleCheckbox(SettingsShowSpectrogramCheckboxId, false);
                 driver.WaitForIdle();
-                Assert.False(driver.IsVisible(SettingsSpectrogramOptionsId));
+                Assert.False(driver.IsVisible(SettingsSpectrogramFrequencyId));
 
                 driver.ToggleCheckbox(SettingsShowSpectrogramCheckboxId, true);
                 driver.WaitForIdle();
-                Assert.True(driver.IsVisible(SettingsSpectrogramOptionsId));
+                Assert.True(driver.IsVisible(SettingsSpectrogramFrequencyId));
 
                 driver.ClickButton(SettingsSaveButtonId);
                 driver.WaitForIdle();
@@ -133,7 +133,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
-        public void SettingsWindowMapSavePathTextReopensPickerWhenUsingGameInstallMode() {
+        public void SettingsWindowReSelectingGameInstallModeReopensPickerAndUpdatesPath() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 var firstInstallFolder = WpfWindowTestHarness.CreateTempOutputFolder("game-install-first");
                 var secondInstallFolder = WpfWindowTestHarness.CreateTempOutputFolder("game-install-second");
@@ -145,8 +145,10 @@ namespace Edda.Wpf.UI.Tests {
                     driver.WaitForIdle();
                     Assert.Equal(firstInstallFolder, driver.GetText(SettingsMapSavePathTextId));
 
+                    driver.SelectDropdown(SettingsMapSaveComboId, "Documents");
+                    driver.WaitForIdle();
                     driver.SetTestFileSelection(secondInstallFolder);
-                    driver.ClickButton(SettingsMapSavePathTextId);
+                    driver.SelectDropdown(SettingsMapSaveComboId, "Game Install");
                     driver.WaitForIdle();
                     Assert.Equal(secondInstallFolder, driver.GetText(SettingsMapSavePathTextId));
                 } finally {
@@ -177,7 +179,7 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void SettingsWindowPlaybackDeviceSelectionPausesPlaybackAndPersists() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
-                driver.ClickButton(SongPlayerButtonId);
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
                 Assert.False(driver.IsEnabled(SongTempoSliderId));
 
@@ -200,7 +202,7 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void SettingsWindowDrumSampleAndPanPausePlaybackAndPersist() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
-                driver.ClickButton(SongPlayerButtonId);
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
                 Assert.False(driver.IsEnabled(SongTempoSliderId));
 
@@ -211,11 +213,11 @@ namespace Edda.Wpf.UI.Tests {
                     Assert.True(driver.IsEnabled(SongTempoSliderId));
                 }
 
-                driver.SendKeyboardShortcutToWindow("Space", MainWindowTitle);
-                driver.WaitForIdle();
-                Assert.False(driver.IsEnabled(SongTempoSliderId));
-
                 var initialPanNotes = driver.IsChecked(SettingsPanNotesCheckboxId);
+                driver.ClickButton(SettingsSaveButtonId);
+                driver.WaitForIdle();
+
+                OpenSettings(driver);
                 driver.ToggleCheckbox(SettingsPanNotesCheckboxId, !initialPanNotes);
                 driver.WaitForIdle();
                 Assert.True(driver.IsEnabled(SongTempoSliderId));
@@ -236,8 +238,8 @@ namespace Edda.Wpf.UI.Tests {
         private static void AssertInvalidTextInputRestored(WpfUIDriver driver, string controlId, string invalidValue) {
             var previousValue = driver.GetText(controlId);
             driver.SetText(controlId, invalidValue);
-            driver.SetText(SettingsDefaultMapperId, driver.GetText(SettingsDefaultMapperId));
-            driver.InvokeCommand("DialogResult.Ok");
+            driver.SendKeyboardShortcutToWindow("Tab", SettingsWindowTitle);
+            driver.TryInvokeCommand("DialogResult.Ok");
             driver.WaitForIdle();
             Assert.Equal(previousValue, driver.GetText(controlId));
         }

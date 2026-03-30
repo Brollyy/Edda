@@ -352,12 +352,14 @@ namespace Edda {
             if (gameInstall == null) {
                 return;
             } else {
+                txtMapSaveFolderPath.Text = gameInstall;
                 userSettings.SetValueForKey(UserSettingsKey.MapSaveLocationPath, gameInstall);
             }
             UpdateSettings();
         }
 
         private string PickGameFolder() {
+            string gameInstall = null;
             var d = new CommonOpenFileDialog();
             d.Title = "Select the folder that Ragnarock is installed in";
             d.IsFolderPicker = true;
@@ -369,13 +371,18 @@ namespace Edda {
                 return null;
             }
 
+            gameInstall = d.FileName;
+            if (gameInstall == null) {
+                return null;
+            }
+
             // make custom song game folder if it doesnt exist
-            var songFolder = Path.Combine(d.FileName, Program.GameInstallRelativeMapFolder);
+            var songFolder = Path.Combine(gameInstall, Program.GameInstallRelativeMapFolder);
             if (!Directory.Exists(songFolder)) {
                 Directory.CreateDirectory(songFolder);
             }
 
-            return d.FileName;
+            return gameInstall;
         }
 
         private void ToggleMapPathVisibility() {

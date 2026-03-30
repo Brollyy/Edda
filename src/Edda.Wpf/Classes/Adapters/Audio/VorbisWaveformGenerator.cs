@@ -28,6 +28,10 @@ public class VorbisWaveformGenerator : IDisposable {
 
     public void Dispose() {
         tokenSource?.Cancel();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (isDrawing && DateTime.UtcNow < deadline) {
+            Thread.Sleep(25);
+        }
         tokenSource = null;
     }
 
@@ -54,67 +58,67 @@ public class VorbisWaveformGenerator : IDisposable {
     }
     private ImageSource _Draw(double height, double width, CancellationToken ct) {
         isDrawing = true;
-        VorbisWaveReader reader = new(filePath);
-        reader.Position = 0;
-        DrawingVisual dv = new DrawingVisual();
-        using (DrawingContext dc = dv.RenderOpen()) {
-            Pen bluePen = new(new SolidColorBrush(color), Editor.Waveform.ThicknessWPF);
-            bluePen.Freeze();
+        try {
+            using var reader = new VorbisWaveReader(filePath);
+            reader.Position = 0;
+            DrawingVisual dv = new DrawingVisual();
+            using (DrawingContext dc = dv.RenderOpen()) {
+                Pen bluePen = new(new SolidColorBrush(color), Editor.Waveform.ThicknessWPF);
+                bluePen.Freeze();
 
-            int channels = reader.WaveFormat.Channels;
-            var bytesPerSample = reader.WaveFormat.BitsPerSample / 8 * channels;
-            var numSamples = reader.Length / bytesPerSample;
+                int channels = reader.WaveFormat.Channels;
+                var bytesPerSample = reader.WaveFormat.BitsPerSample / 8 * channels;
+                var numSamples = reader.Length / bytesPerSample;
 
-            int samplesPerPixel = (int)(numSamples / height) * channels;
-            double samplesPerPixel_d = numSamples / height * channels;
-            int totalSamples = 0;
-            double totalSamples_d = 0;
+                int samplesPerPixel = (int)(numSamples / height) * channels;
+                double samplesPerPixel_d = numSamples / height * channels;
+                int totalSamples = 0;
+                double totalSamples_d = 0;
 
-            var buffer = new float[samplesPerPixel + channels];
-            for (int pixel = 0; pixel < height; pixel++) {
+                var buffer = new float[samplesPerPixel + channels];
+                for (int pixel = 0; pixel < height; pixel++) {
 
-                // read samples
-                int samplesRead = reader.Read(buffer, 0, samplesPerPixel);
-                if (samplesRead == 0) {
-                    break;
-                }
+                    // read samples
+                    int samplesRead = reader.Read(buffer, 0, samplesPerPixel);
+                    if (samplesRead == 0) {
+                        break;
+                    }
 
-                // correct floating point rounding errors
-                totalSamples += samplesPerPixel;
-                totalSamples_d += samplesPerPixel_d;
-                if (totalSamples_d - totalSamples > channels) {
-                    totalSamples += channels;
-                    reader.Read(buffer, samplesPerPixel, channels);
-                }
+                    // correct floating point rounding errors
+                    totalSamples += samplesPerPixel;
+                    totalSamples_d += samplesPerPixel_d;
+                    if (totalSamples_d - totalSamples > channels) {
+                        totalSamples += channels;
+                        reader.Read(buffer, samplesPerPixel, channels);
+                    }
 
-                var samples = new List<float>(buffer);
-                samples.Sort();
-                float lowPercent = (samples[(int)((samples.Count - 1) * (1 - Editor.Waveform.SampleMaxPercentile))] + 1) / 2;
-                float highPercent = (samples[(int)((samples.Count - 1) * Editor.Waveform.SampleMaxPercentile)] + 1) / 2;
-                float lowValue = (float)width * lowPercent;
-                float highValue = (float)width * highPercent;
-                dc.DrawLine(
-                    bluePen,
-                    new Point(lowValue, (int)(height - pixel)),
-                    new Point(highValue, (int)(height - pixel))
-                );
+                    var samples = new List<float>(buffer);
+                    samples.Sort();
+                    float lowPercent = (samples[(int)((samples.Count - 1) * (1 - Editor.Waveform.SampleMaxPercentile))] + 1) / 2;
+                    float highPercent = (samples[(int)((samples.Count - 1) * Editor.Waveform.SampleMaxPercentile)] + 1) / 2;
+                    float lowValue = (float)width * lowPercent;
+                    float highValue = (float)width * highPercent;
+                    dc.DrawLine(
+                        bluePen,
+                        new Point(lowValue, (int)(height - pixel)),
+                        new Point(highValue, (int)(height - pixel))
+                    );
 
-                // cancel task if required
-                if (ct.IsCancellationRequested) {
-                    isDrawing = false;
-                    return null;
+                    if (ct.IsCancellationRequested) {
+                        return null;
+                    }
                 }
             }
+            RenderTargetBitmap bmp = new RenderTargetBitmap((int)width, (int)height, 96, 96, PixelFormats.Pbgra32);
+            bmp.Render(dv);
+            bmp.Freeze();
+            //RenderTargetToDisk(bmp);
+            // this causes a UCEERR_RENDERTHREADFAILURE when hardware acceleration is enabled... but why?
+            //return bmp; 
+            return RenderTargetToImage(bmp);
+        } finally {
+            isDrawing = false;
         }
-        RenderTargetBitmap bmp = new RenderTargetBitmap((int)width, (int)height, 96, 96, PixelFormats.Pbgra32);
-        bmp.Render(dv);
-        bmp.Freeze();
-        //RenderTargetToDisk(bmp);
-        isDrawing = false;
-        reader.Dispose();
-        // this causes a UCEERR_RENDERTHREADFAILURE when hardware acceleration is enabled... but why?
-        //return bmp; 
-        return RenderTargetToImage(bmp);
     }
     private static void RenderTargetToDisk(RenderTargetBitmap input) {
         // https://stackoverflow.com/questions/13987408/convert-rendertargetbitmap-to-bitmapimage#13988871

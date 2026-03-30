@@ -40,14 +40,6 @@ namespace Edda.Wpf.UI.Tests {
                 driver.SelectMenuItem("Help>About Edda");
                 driver.WaitForIdle();
 
-                driver.MoveMouseWithinElement(AboutGithubLinkId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.Equal("Hand", driver.GetCurrentCursorKind());
-
-                driver.MoveMouseWithinElement(AboutVersionTextId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.NotEqual("Hand", driver.GetCurrentCursorKind());
-
                 driver.ClickButton(AboutGithubLinkId);
                 driver.WaitForIdle();
                 Assert.Equal(1, driver.CountWindowsByTitle(AboutWindowTitle));

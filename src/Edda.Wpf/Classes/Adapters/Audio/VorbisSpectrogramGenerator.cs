@@ -38,6 +38,10 @@ public class VorbisSpectrogramGenerator : IDisposable {
 
     public void Dispose() {
         tokenSource?.Cancel();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (isDrawing && DateTime.UtcNow < deadline) {
+            Thread.Sleep(25);
+        }
         tokenSource = null;
         cachedSpectrograms = null;
     }

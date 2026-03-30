@@ -16,7 +16,7 @@ namespace Edda.Wpf.UI.Tests {
         private const string StartupRecentMapsListId = "ListViewRecentMaps";
 
         private const string SongNameTextBoxId = "txtSongName";
-        private const string SongFileNameTextId = "txtSongFile";
+        private const string SongFileNameTextId = "txtSongFileName";
         private const string FixtureMapFolderRelative = "tests/TestData/Wpf/MainWindow/FixtureMap";
 
         [Fact]
@@ -48,9 +48,9 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
-                Assert.True(driver.IsVisible(MainWindowId));
+                Assert.True(driver.IsVisible(MainWindowId), $"{driver.GetWindowDebugSummary()}{Environment.NewLine}{driver.GetTestLog()}");
                 Assert.False(driver.IsVisible(StartWindowId));
             } finally {
                 driver.Shutdown();
@@ -86,7 +86,7 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
 
                 var before = driver.GetElementBounds(StartWindowId);
-                driver.DragWithinElement(StartupDragSurfaceId, 0.5, 0.5, 0.8, 0.8);
+                driver.DragWithinElement(StartWindowId, 0.5, 0.05, 0.8, 0.2);
                 driver.WaitForIdle();
                 var after = driver.GetElementBounds(StartWindowId);
 
@@ -109,7 +109,7 @@ namespace Edda.Wpf.UI.Tests {
                 pickerSourceFolder = WpfWindowTestHarness.CreateTempOutputFolder("start-new-map-song-source");
 
                 var sourceSongPath = Path.Combine(WpfWindowTestHarness.GetRepositoryRoot(), FixtureMapFolderRelative, "song.ogg");
-                var pickedSongName = "startnewmapsong.ogg";
+                var pickedSongName = "song.ogg";
                 var pickedSongPath = Path.Combine(pickerSourceFolder, pickedSongName);
                 File.Copy(sourceSongPath, pickedSongPath, overwrite: true);
 
@@ -117,7 +117,7 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.SetTestFileSelections(newMapFolder, pickedSongPath);
                 driver.ClickButton(StartupNewMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.True(driver.IsVisible(MainWindowId));
                 Assert.Equal(pickedSongName, driver.GetText(SongFileNameTextId));
@@ -145,7 +145,7 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.SetTestFileSelections(importTargetFolder, importFixture.simfilePath);
                 driver.ClickButton(StartupImportMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.True(driver.IsVisible(MainWindowId));
                 Assert.Equal("Start Import Song", driver.GetText(SongNameTextBoxId));
@@ -169,15 +169,15 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
                 Assert.True(driver.ContainsText(mapFolder));
 
-                driver.ClickElementByName(mapFolder);
-                driver.WaitForIdle();
+                driver.ClickListItemContainingText(StartupRecentMapsListId, mapFolder);
+                driver.WaitForMainWindow();
                 Assert.True(driver.IsVisible(MainWindowId));
                 Assert.False(driver.IsVisible(StartWindowId));
             } finally {
@@ -197,20 +197,20 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
                 Assert.True(driver.ContainsText(mapFolder));
                 var initialCount = driver.GetListItemCount(StartupRecentMapsListId);
 
-                driver.RightClickElementByName(mapFolder);
+                driver.RightClickListItemContainingText(StartupRecentMapsListId, mapFolder);
                 driver.InvokeCommand("DialogResult.No");
                 Assert.True(driver.ContainsText(mapFolder));
                 Assert.Equal(initialCount, driver.GetListItemCount(StartupRecentMapsListId));
 
-                driver.RightClickElementByName(mapFolder);
+                driver.RightClickListItemContainingText(StartupRecentMapsListId, mapFolder);
                 driver.InvokeCommand("DialogResult.Yes");
                 Assert.False(driver.ContainsText(mapFolder));
                 Assert.Equal(initialCount - 1, driver.GetListItemCount(StartupRecentMapsListId));
@@ -233,19 +233,19 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
                 Assert.True(driver.ContainsText(staleMapPath));
 
                 WpfWindowTestHarness.SafeDeleteDirectory(staleMapPath);
                 mapFolder = null;
 
-                driver.ClickElementByName(staleMapPath);
+                driver.ClickListItemContainingText(StartupRecentMapsListId, staleMapPath);
                 driver.InvokeCommand("DialogResult.Ok");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
 
                 Assert.True(driver.IsVisible(StartWindowId));
                 Assert.False(driver.ContainsText(staleMapPath));

@@ -290,12 +290,7 @@ public class EditorGridController : IDisposable {
         imgAudioWaveform = null;
         imgPreviewNote = null;
 
-        audioSpectrogram?.Dispose();
-        audioSpectrogram = null;
-        audioWaveform?.Dispose();
-        audioWaveform = null;
-        navWaveform?.Dispose();
-        navWaveform = null;
+        UnloadWaveforms();
 
         currentlyDraggingMarker = null;
         currentlyDraggingBookmark = null;
@@ -327,7 +322,17 @@ public class EditorGridController : IDisposable {
     }
 
     // waveform drawing
+    public void UnloadWaveforms() {
+        audioSpectrogram?.Dispose();
+        audioSpectrogram = null;
+        audioWaveform?.Dispose();
+        audioWaveform = null;
+        navWaveform?.Dispose();
+        navWaveform = null;
+    }
+
     public void InitWaveforms(string songPath) {
+        UnloadWaveforms();
         audioSpectrogram = new VorbisSpectrogramGenerator(songPath, spectrogramCache, spectrogramType, spectrogramQuality, spectrogramFrequency, spectrogramColormap, spectrogramFlipped);
         audioWaveform = new VorbisWaveformGenerator(songPath, Editor.Waveform.ColourWPF);
         navWaveform = new VorbisWaveformGenerator(songPath, (MediaColor)(ColorConverter.ConvertFromString(parentWindow.GetUserSetting(UserSettingsKey.NavWaveformColor)) ?? Editor.Waveform.ColourWPF));

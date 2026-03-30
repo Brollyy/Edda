@@ -26,7 +26,7 @@ namespace Edda.Const {
 #else
             VersionString.Replace("b", " Beta ");
 #endif
-        public static string ProgramDataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Edda");
+        public static string ProgramDataDir => Path.Combine(Helper.GetRoamingAppDataDirectory(), "Edda");
         public static string SettingsFile => Path.Combine(ProgramDataDir, "settings.txt");
         public static string RecentOpenedMapsFile => Path.Combine(ProgramDataDir, "recentMaps.txt");
         public const int MaxRecentOpenedMaps = 10;

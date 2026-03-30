@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -17,7 +18,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.Equal("0", driver.GetText(BpmFinderInputCounterId));
                 Assert.Equal("0", driver.GetText(BpmFinderAverageBpmId));
-                Assert.Equal("(0.00)", driver.GetText(BpmFinderPreciseAverageBpmId));
+                Assert.Equal(0, ParsePreciseBpmText(driver.GetText(BpmFinderPreciseAverageBpmId)), 2);
             });
         }
 
@@ -32,7 +33,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.Equal("0", driver.GetText(BpmFinderInputCounterId));
                 Assert.Equal("0", driver.GetText(BpmFinderAverageBpmId));
-                Assert.Equal("(0.00)", driver.GetText(BpmFinderPreciseAverageBpmId));
+                Assert.Equal(0, ParsePreciseBpmText(driver.GetText(BpmFinderPreciseAverageBpmId)), 2);
             });
         }
 
@@ -51,7 +52,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.Equal("2", driver.GetText(BpmFinderInputCounterId));
                 Assert.NotEqual("0", driver.GetText(BpmFinderAverageBpmId));
-                Assert.Matches(new Regex(@"^\(\d+\.\d{2}\)$"), driver.GetText(BpmFinderPreciseAverageBpmId));
+                Assert.Matches(new Regex(@"^\(\d+[.,]\d{2}\)$"), driver.GetText(BpmFinderPreciseAverageBpmId));
             });
         }
 
@@ -72,8 +73,17 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.Equal("0", driver.GetText(BpmFinderInputCounterId));
                 Assert.Equal("0", driver.GetText(BpmFinderAverageBpmId));
-                Assert.Equal("(0.00)", driver.GetText(BpmFinderPreciseAverageBpmId));
+                Assert.Equal(0, ParsePreciseBpmText(driver.GetText(BpmFinderPreciseAverageBpmId)), 2);
             });
+        }
+
+        private static double ParsePreciseBpmText(string text) {
+            var normalized = text.Trim().TrimStart('(').TrimEnd(')').Replace(',', '.');
+            if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) {
+                return parsed;
+            }
+
+            throw new Xunit.Sdk.XunitException($"Expected a precise BPM value, but got '{text}'.");
         }
     }
 }

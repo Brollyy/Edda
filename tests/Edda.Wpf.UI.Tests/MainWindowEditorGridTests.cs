@@ -17,6 +17,7 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void AddNoteFromMenuUpdatesTotalAndColumnStats() {
             RunOpenedFixtureMapTest((driver, _) => {
+                driver.ClickButton("columnStats");
                 var initialAll = ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId);
                 var initialColumn1 = ParseIntegerText(driver.GetText(ColumnStatsValue1Id), ColumnStatsValue1Id);
 
@@ -166,7 +167,7 @@ namespace Edda.Wpf.UI.Tests {
             driver.WaitForIdle();
             driver.SetTestFileSelection(fixtureCopy);
             driver.ClickButton(StartupOpenMapButtonId);
-            driver.WaitForIdle();
+            driver.WaitForMainWindow();
 
             return fixtureCopy;
         }

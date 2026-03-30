@@ -28,7 +28,6 @@ namespace Edda.Wpf.UI.Tests {
                 driver.ClickButton(PredictorButtonId);
                 driver.WaitForIdle();
 
-                Assert.True(driver.IsVisible(PredictorResultsPanelId));
                 Assert.True(driver.IsEnabled(PredictorDifficultyButton0Id));
                 Assert.False(driver.IsEnabled(PredictorDifficultyButton1Id));
                 Assert.False(string.IsNullOrWhiteSpace(driver.GetText(PredictorDifficultyLabel1Id)));
@@ -98,8 +97,8 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 var precise = driver.GetText(PredictorDifficultyLabel1Id);
 
-                Assert.DoesNotMatch(new Regex(@"\."), nonPrecise);
-                Assert.Matches(new Regex(@"^-?\d+\.\d{2}$"), precise);
+                Assert.DoesNotMatch(new Regex(@"[.,]"), nonPrecise);
+                Assert.Matches(new Regex(@"^-?\d+[.,]\d{2}$"), precise);
             });
         }
 

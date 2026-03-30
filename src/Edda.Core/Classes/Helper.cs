@@ -105,6 +105,15 @@ public partial class Helper {
     }
 
     // File I/O
+    public static string GetRoamingAppDataDirectory() {
+        var appDataPath = Environment.GetEnvironmentVariable("APPDATA");
+        if (!string.IsNullOrWhiteSpace(appDataPath) && Path.IsPathRooted(appDataPath)) {
+            return appDataPath;
+        }
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    }
+
     public static string SanitiseSongFileName(string fileName) {
         //return fileName.Replace(" ", "-");
         return BeatmapDefaults.SongFilename;

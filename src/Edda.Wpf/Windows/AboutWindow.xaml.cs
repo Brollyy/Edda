@@ -32,20 +32,5 @@ namespace Edda.Windows {
             Helper.OpenWebUrl(TxtRagnacustomsLink.Text);
         }
 
-        private void TxtGithubLink_MouseEnter(object sender, MouseEventArgs e) {
-            this.Cursor = Cursors.Hand;
-        }
-
-        private void TxtGithubLink_MouseLeave(object sender, MouseEventArgs e) {
-            this.Cursor = null;
-        }
-
-        private void TxtRagnacustomsLink_MouseEnter(object sender, MouseEventArgs e) {
-            this.Cursor = Cursors.Hand;
-        }
-
-        private void TxtRagnacustomsLink_MouseLeave(object sender, MouseEventArgs e) {
-            this.Cursor = null;
-        }
     }
 }

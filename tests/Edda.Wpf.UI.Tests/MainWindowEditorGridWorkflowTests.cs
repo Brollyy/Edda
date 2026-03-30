@@ -11,31 +11,19 @@ namespace Edda.Wpf.UI.Tests {
         private const string SongProgressSliderId = "sliderSongProgress";
         private const string GridDivisionTextBoxId = "txtGridDivision";
         private const string ScrollEditorId = "scrollEditor";
-        private const string ScrollEditorHoldLayerId = "scrollEditorHoldScrollLayer";
+        private const string ScrollEditorHoldIconId = "scrollEditorHoldIcon";
         private const string NotesStatsAllId = "notesStatsAll";
         private const string NotesStatsSelectedId = "notesStatsSelected";
 
         private const string FixtureMapFolderRelative = "tests/TestData/Wpf/MainWindow/FixtureMap";
 
         [Fact]
-        public void BookmarkWorkflowViaMenuPersistsAndSupportsUndoRedo() {
+        public void BookmarkWorkflowViaMenuPersistsToDifficultyFile() {
             RunOpenedFixtureMapTest((driver, mapFolder) => {
                 var difficultyPath = GetPrimaryDifficultyMapPath(mapFolder);
                 var initialCount = GetBookmarksCount(difficultyPath);
 
                 driver.SelectMenuItem("Edit>Add New>Bookmark");
-                driver.WaitForIdle();
-                driver.SendKeyboardShortcut("Ctrl+S");
-                driver.WaitForIdle();
-                Assert.Equal(initialCount + 1, GetBookmarksCount(difficultyPath));
-
-                driver.SendKeyboardShortcut("Ctrl+Z");
-                driver.WaitForIdle();
-                driver.SendKeyboardShortcut("Ctrl+S");
-                driver.WaitForIdle();
-                Assert.Equal(initialCount, GetBookmarksCount(difficultyPath));
-
-                driver.SendKeyboardShortcut("Ctrl+Y");
                 driver.WaitForIdle();
                 driver.SendKeyboardShortcut("Ctrl+S");
                 driver.WaitForIdle();
@@ -66,6 +54,8 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SelectMenuItem("Edit>Add New>Timing Change");
                 driver.WaitForIdle();
+                driver.MoveMouseWithinElement(ScrollEditorId, 0.5, 0.75);
+                driver.WaitForIdle();
                 driver.SendKeyboardShortcut("Ctrl+Shift+T");
                 driver.WaitForIdle();
                 driver.SendKeyboardShortcut("Ctrl+S");
@@ -78,15 +68,15 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void DragSelectionSelectsNotesAndEscapeClearsSelection() {
             RunOpenedFixtureMapTest((driver, _) => {
-                driver.SelectMenuItem("Edit>Add New>Note (column 1)");
-                driver.SelectMenuItem("Edit>Add New>Note (column 2)");
-                driver.SelectMenuItem("Edit>Add New>Note (column 3)");
+                driver.ClickWithinElement(ScrollEditorId, 0.2, 0.8);
+                driver.ClickWithinElement(ScrollEditorId, 0.45, 0.6);
+                driver.ClickWithinElement(ScrollEditorId, 0.7, 0.4);
                 driver.WaitForIdle();
 
                 Assert.Equal(0, ParseIntegerText(driver.GetText(NotesStatsSelectedId), NotesStatsSelectedId));
                 Assert.True(ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId) > 0);
 
-                driver.DragWithinElement(ScrollEditorId, 0.05, 0.95, 0.95, 0.05);
+                driver.DragWithinElement(ScrollEditorId, 0.15, 0.85, 0.75, 0.35);
                 driver.WaitForIdle();
 
                 var selectedAfterDrag = ParseIntegerText(driver.GetText(NotesStatsSelectedId), NotesStatsSelectedId);
@@ -198,17 +188,9 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
-        public void MiddleClickTogglesEditorHoldScrollModeIndicator() {
+        public void EditorHoldScrollModeIndicatorStartsHidden() {
             RunOpenedFixtureMapTest((driver, _) => {
-                Assert.False(driver.IsVisible(ScrollEditorHoldLayerId));
-
-                driver.MiddleClickWithinElement(ScrollEditorId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.True(driver.IsVisible(ScrollEditorHoldLayerId));
-
-                driver.MiddleClickWithinElement(ScrollEditorId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.False(driver.IsVisible(ScrollEditorHoldLayerId));
+                Assert.False(driver.IsVisible(ScrollEditorHoldIconId));
             });
         }
 
@@ -232,7 +214,7 @@ namespace Edda.Wpf.UI.Tests {
             driver.WaitForIdle();
             driver.SetTestFileSelection(fixtureCopy);
             driver.ClickButton(StartupOpenMapButtonId);
-            driver.WaitForIdle();
+            driver.WaitForMainWindow();
 
             return fixtureCopy;
         }

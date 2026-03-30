@@ -17,6 +17,11 @@ namespace Edda.Wpf.UI.Tests {
         private const string MainWindowId = "AppMainWindow";
         private const string MainWindowFallbackTitle = "Edda";
         private const string StartWindowOpenMapButtonId = "ButtonOpenMap";
+        private static readonly string[] MainWindowSentinelIds = {
+            "btnSongPlayer",
+            "sliderSongProgress",
+            "txtSongName"
+        };
         private const string PickerCancelSentinel = "__EDDA_TEST_PICKER_CANCEL__";
         private static readonly string[] PickerDialogTitles = {
             "Select your map's containing folder",
@@ -28,6 +33,7 @@ namespace Edda.Wpf.UI.Tests {
         };
 
         private const uint KeyEventFKeyUp = 0x0002;
+        private const uint KeyEventFScancode = 0x0008;
         private const uint MouseEventFLeftDown = 0x0002;
         private const uint MouseEventFLeftUp = 0x0004;
         private const uint MouseEventFRightDown = 0x0008;
@@ -142,13 +148,28 @@ namespace Edda.Wpf.UI.Tests {
         public void WaitForIdle(TimeSpan? timeout = null) {
             EnsureLaunched();
 
-            var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromMilliseconds(250));
+            var remaining = timeout ?? TimeSpan.FromSeconds(2);
+            var deadline = DateTime.UtcNow + remaining;
             while (DateTime.UtcNow < deadline) {
                 if (appProcess is { HasExited: true }) {
                     throw new InvalidOperationException("Edda process exited unexpectedly.");
                 }
-                Thread.Sleep(30);
+
+                try {
+                    var waitMs = Math.Max(1, (int)Math.Min(remaining.TotalMilliseconds, 250));
+                    if (appProcess?.WaitForInputIdle(waitMs) == true) {
+                        Thread.Sleep(80);
+                        return;
+                    }
+                } catch {
+                    // Some environments/process states do not expose input-idle reliably.
+                }
+
+                Thread.Sleep(40);
+                remaining = deadline - DateTime.UtcNow;
             }
+
+            Thread.Sleep(80);
         }
 
         public bool IsProcessRunning() {
@@ -180,7 +201,14 @@ namespace Edda.Wpf.UI.Tests {
                 return;
             }
 
-            throw new InvalidOperationException($"Element '{id}' does not support text input.");
+            var bounds = element.Current.BoundingRectangle;
+            var x = (int)(bounds.Left + bounds.Width / 2);
+            var y = (int)(bounds.Top + bounds.Height / 2);
+            PerformLeftDoubleClick(x, y);
+            Thread.Sleep(40);
+            SendCombo(VirtualKeyControl, 0x41); // Ctrl+A
+            Thread.Sleep(40);
+            SendText(value);
         }
 
         public void SetSliderValue(string id, double value) {
@@ -223,7 +251,12 @@ namespace Edda.Wpf.UI.Tests {
 
         public bool IsVisible(string id) {
             var element = GetElementOrNull(id);
-            return element != null && !element.Current.IsOffscreen;
+            if (element == null) {
+                return false;
+            }
+
+            var bounds = element.Current.BoundingRectangle;
+            return !element.Current.IsOffscreen && bounds.Width > 1 && bounds.Height > 1;
         }
 
         public bool IsEnabled(string id) {
@@ -257,8 +290,38 @@ namespace Edda.Wpf.UI.Tests {
                 return;
             }
 
+            FocusElementWindow(element);
+            TrySetFocus(element);
+            SendKey(0x20); // Space
+            WaitForIdle();
+            if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
+                return;
+            }
+
+            for (var attempt = 0; attempt < 2; attempt++) {
+                var bounds = element.Current.BoundingRectangle;
+                var x = (int)(bounds.Left + bounds.Width / 2);
+                var y = (int)(bounds.Top + bounds.Height / 2);
+
+                SetCursorPos(x, y);
+                Thread.Sleep(20);
+                mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(20);
+                mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+                WaitForIdle();
+
+                if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
+                    return;
+                }
+            }
+
             toggle.Toggle();
             WaitForIdle();
+            if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
+                return;
+            }
+
+            throw new InvalidOperationException($"Checkbox '{id}' did not reach the requested state '{value}'.");
         }
 
         public string GetSelectedValue(string id) {
@@ -273,9 +336,14 @@ namespace Edda.Wpf.UI.Tests {
 
         public void SelectDropdown(string id, string value) {
             var combo = GetElement(id);
+            FocusElementWindow(combo);
+            TrySetFocus(combo);
             if (combo.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj)) {
                 ((ExpandCollapsePattern)expandObj).Expand();
+            } else {
+                ClickElement(combo);
             }
+            Thread.Sleep(80);
 
             var item = WaitForElement(
                 () => FindElementByName(value, ControlType.ListItem) ?? FindElementByName(value, ControlType.MenuItem),
@@ -283,15 +351,7 @@ namespace Edda.Wpf.UI.Tests {
                 $"Dropdown item '{value}'"
             );
 
-            if (item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selectionObj)) {
-                ((SelectionItemPattern)selectionObj).Select();
-            } else {
-                ClickElement(item);
-            }
-
-            if (combo.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out expandObj)) {
-                ((ExpandCollapsePattern)expandObj).Collapse();
-            }
+            PhysicalClickElement(item);
 
             TryHandlePendingPickerDialogs();
             WaitForIdle();
@@ -388,6 +448,28 @@ namespace Edda.Wpf.UI.Tests {
             WaitForIdle();
         }
 
+        public void ClickListItemContainingText(string listAutomationId, string text) {
+            var list = GetElement(listAutomationId);
+            var item = WaitForElement(
+                () => FindListItemContainingText(list, text),
+                defaultTimeout,
+                $"List item containing '{text}' in '{listAutomationId}'"
+            );
+            FocusElementWindow(item);
+            TrySetFocus(item);
+
+            var bounds = item.Current.BoundingRectangle;
+            var x = (int)(bounds.Left + bounds.Width / 2);
+            var y = (int)(bounds.Top + bounds.Height / 2);
+
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+            WaitForIdle();
+        }
+
         public void RightClickElementByName(string name) {
             var element = WaitForElement(
                 () => FindElementByName(name),
@@ -408,6 +490,27 @@ namespace Edda.Wpf.UI.Tests {
             WaitForIdle();
         }
 
+        public void RightClickListItemContainingText(string listAutomationId, string text) {
+            var list = GetElement(listAutomationId);
+            var item = WaitForElement(
+                () => FindListItemContainingText(list, text),
+                defaultTimeout,
+                $"List item containing '{text}' in '{listAutomationId}'"
+            );
+
+            FocusElementWindow(item);
+            var bounds = item.Current.BoundingRectangle;
+            var x = (int)(bounds.Left + bounds.Width / 2);
+            var y = (int)(bounds.Top + bounds.Height / 2);
+
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFRightDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFRightUp, 0, 0, 0, UIntPtr.Zero);
+            WaitForIdle();
+        }
+
         public int CountWindowsByTitle(string title) {
             EnsureLaunched();
             if (string.IsNullOrWhiteSpace(title)) {
@@ -416,6 +519,33 @@ namespace Edda.Wpf.UI.Tests {
 
             return GetProcessWindows().Count(window =>
                 string.Equals(window.Current.Name ?? string.Empty, title, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public string GetWindowDebugSummary() {
+            EnsureLaunched();
+
+            var windows = GetProcessWindows()
+                .Select(window => {
+                    var title = window.Current.Name ?? string.Empty;
+                    var automationId = window.Current.AutomationId ?? string.Empty;
+                    var handle = window.Current.NativeWindowHandle;
+                    var offscreen = window.Current.IsOffscreen;
+                    return $"Window(title='{title}', id='{automationId}', hwnd={handle}, offscreen={offscreen}, descendants=[{DescribeWindowDescendants(window)}])";
+                });
+
+            return string.Join("; ", windows);
+        }
+
+        public string GetTestLog() {
+            if (appProcess is not { HasExited: true }) {
+                return string.Empty;
+            }
+
+            try {
+                return $"Edda process exited with code {appProcess.ExitCode}.";
+            } catch {
+                return string.Empty;
+            }
         }
 
         public bool ContainsText(string text) {
@@ -525,6 +655,44 @@ namespace Edda.Wpf.UI.Tests {
             ClickButton(id);
         }
 
+        public bool IsMenuItemVisible(string path) {
+            EnsureLaunched();
+            var menuItem = FindMenuItemByPath(path);
+            try {
+                if (menuItem == null) {
+                    return false;
+                }
+
+                var bounds = menuItem.Current.BoundingRectangle;
+                return !menuItem.Current.IsOffscreen && bounds.Width > 1 && bounds.Height > 1;
+            } finally {
+                DismissOpenMenus();
+            }
+        }
+
+        public bool IsMenuItemChecked(string path) {
+            EnsureLaunched();
+            var menuItem = WaitForElement(
+                () => FindMenuItemByPath(path),
+                defaultTimeout,
+                $"Menu item '{path}'"
+            );
+
+            try {
+                if (menuItem.TryGetCurrentPattern(TogglePattern.Pattern, out var toggleObj)) {
+                    return ((TogglePattern)toggleObj).Current.ToggleState == ToggleState.On;
+                }
+
+                if (menuItem.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selectionObj)) {
+                    return ((SelectionItemPattern)selectionObj).Current.IsSelected;
+                }
+
+                return false;
+            } finally {
+                DismissOpenMenus();
+            }
+        }
+
         public void SelectMenuItem(string path) {
             var segments = path.Split('>', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (segments.Length == 0) {
@@ -569,12 +737,22 @@ namespace Edda.Wpf.UI.Tests {
             TryHandlePendingPickerDialogs();
         }
 
+        public void SendKeyboardShortcutToElement(string id, string shortcut) {
+            var element = GetElement(id);
+            FocusElementWindow(element);
+            TrySetFocus(element);
+            SendKeyboardShortcutCore(shortcut);
+            TryHandlePendingPickerDialogs();
+        }
+
         public void MoveMouseWithinElement(string elementId, double xRatio, double yRatio) {
             var element = GetElement(elementId);
             FocusElementWindow(element);
             var point = ResolvePointInElement(element, xRatio, yRatio);
+            SetCursorPos(point.x + 8, point.y + 8);
+            Thread.Sleep(20);
             SetCursorPos(point.x, point.y);
-            Thread.Sleep(25);
+            Thread.Sleep(40);
         }
 
         public string GetCurrentCursorKind() {
@@ -647,12 +825,15 @@ namespace Edda.Wpf.UI.Tests {
         public void MiddleClickWithinElement(string elementId, double xRatio, double yRatio) {
             var element = GetElement(elementId);
             FocusElementWindow(element);
+            TrySetFocus(element);
             var point = ResolvePointInElement(element, xRatio, yRatio);
 
+            SetCursorPos(point.x + 4, point.y + 4);
+            Thread.Sleep(20);
             SetCursorPos(point.x, point.y);
             Thread.Sleep(20);
             mouse_event(MouseEventFMiddleDown, 0, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(20);
+            Thread.Sleep(60);
             mouse_event(MouseEventFMiddleUp, 0, 0, 0, UIntPtr.Zero);
             WaitForIdle();
         }
@@ -663,6 +844,19 @@ namespace Edda.Wpf.UI.Tests {
             var bounds = element.Current.BoundingRectangle;
             var x = (int)(bounds.Left + bounds.Width / 2);
             var y = (int)(bounds.Top + bounds.Height / 2);
+
+            if (Equals(element.Current.ControlType, ControlType.Slider) &&
+                element.TryGetCurrentPattern(RangeValuePattern.Pattern, out var rangeObj)) {
+                var range = (RangeValuePattern)rangeObj;
+                var minimum = range.Current.Minimum;
+                var maximum = range.Current.Maximum;
+                if (maximum > minimum) {
+                    var ratio = ClampRatio((range.Current.Value - minimum) / (maximum - minimum));
+                    ratio = Math.Max(0.05, Math.Min(0.95, ratio));
+                    x = (int)(bounds.Left + bounds.Width * ratio);
+                }
+            }
+
             PerformLeftDoubleClick(x, y);
             WaitForIdle();
         }
@@ -756,6 +950,33 @@ namespace Edda.Wpf.UI.Tests {
             WaitForIdle();
         }
 
+        public bool TryInvokeCommand(string commandId, TimeSpan? timeout = null) {
+            EnsureLaunched();
+
+            var normalized = commandId.Trim();
+            string buttonName = normalized switch {
+                "DialogResult.Yes" => "Yes",
+                "DialogResult.No" => "No",
+                "DialogResult.Cancel" => "Cancel",
+                "DialogResult.Ok" => "OK",
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrEmpty(buttonName)) {
+                return false;
+            }
+
+            var button = WaitUntil(
+                () => FindDialogButton(buttonName) != null,
+                timeout ?? TimeSpan.FromSeconds(2));
+            if (!button) {
+                return false;
+            }
+
+            InvokeCommand(commandId);
+            return true;
+        }
+
         public void SetTestFileSelection(string path) {
             EnsureLaunched();
             if (string.IsNullOrWhiteSpace(path)) {
@@ -772,12 +993,16 @@ namespace Edda.Wpf.UI.Tests {
                 throw new ArgumentException("At least one file or folder path is required.", nameof(paths));
             }
 
-            pendingFileSelections.Clear();
-            foreach (var path in paths) {
+            var normalizedPaths = paths.Select(path => {
                 if (string.IsNullOrWhiteSpace(path)) {
                     throw new ArgumentException("Test file selection paths cannot be empty.", nameof(paths));
                 }
-                pendingFileSelections.Enqueue(Path.GetFullPath(path));
+                return Path.GetFullPath(path);
+            }).ToArray();
+
+            pendingFileSelections.Clear();
+            foreach (var path in normalizedPaths) {
+                pendingFileSelections.Enqueue(path);
             }
         }
 
@@ -785,6 +1010,22 @@ namespace Edda.Wpf.UI.Tests {
             EnsureLaunched();
             pendingFileSelections.Clear();
             pendingFileSelections.Enqueue(PickerCancelSentinel);
+        }
+
+        public void WaitForMainWindow(TimeSpan? timeout = null) {
+            try {
+                _ = WaitForElement(FindMainWindow, timeout ?? defaultTimeout, "main window");
+            } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
+                throw new TimeoutException(WithDiagnostics(ex.Message));
+            }
+        }
+
+        public void WaitForStartWindow(TimeSpan? timeout = null) {
+            try {
+                _ = WaitForElement(FindStartWindow, timeout ?? defaultTimeout, "start window");
+            } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
+                throw new TimeoutException(WithDiagnostics(ex.Message));
+            }
         }
 
         public void AssertNotificationContains(string text) {
@@ -810,7 +1051,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindStartWindow() {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 if (FindByAutomationIdWithin(window, StartWindowOpenMapButtonId) != null) {
                     return window;
                 }
@@ -820,12 +1061,16 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindMainWindow() {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 if (string.Equals(window.Current.Name, MainWindowFallbackTitle, StringComparison.OrdinalIgnoreCase)) {
                     return window;
                 }
 
                 if (FindByAutomationIdWithin(window, MainWindowId) != null) {
+                    return window;
+                }
+
+                if (MainWindowSentinelIds.Any(id => FindByAutomationIdWithin(window, id) != null)) {
                     return window;
                 }
             }
@@ -834,7 +1079,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindElementByAutomationId(string automationId) {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 var inWindow = FindByAutomationIdWithin(window, automationId);
                 if (inWindow != null) {
                     return inWindow;
@@ -854,7 +1099,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindElementByName(string name, ControlType controlType) {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 var condition = new AndCondition(
                     new PropertyCondition(AutomationElement.ControlTypeProperty, controlType),
                     new PropertyCondition(AutomationElement.NameProperty, name)
@@ -869,7 +1114,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindElementByName(string name) {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 var condition = new PropertyCondition(AutomationElement.NameProperty, name);
                 var element = window.FindFirst(TreeScope.Descendants, condition);
                 if (element != null) {
@@ -880,8 +1125,45 @@ namespace Edda.Wpf.UI.Tests {
             return null;
         }
 
+        private AutomationElement? FindMenuItemByPath(string path) {
+            var segments = path.Split('>', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments.Length == 0) {
+                return null;
+            }
+
+            var mainWindow = FindMainWindow();
+            if (mainWindow == null) {
+                return null;
+            }
+
+            FocusWindow(mainWindow);
+            AutomationElement currentScope = mainWindow;
+            for (var i = 0; i < segments.Length; i++) {
+                var segment = segments[i];
+                var menuItem = FindMenuItem(segment, currentScope);
+                if (menuItem == null) {
+                    return null;
+                }
+
+                if (i == segments.Length - 1) {
+                    return menuItem;
+                }
+
+                if (menuItem.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj)) {
+                    ((ExpandCollapsePattern)expandObj).Expand();
+                } else {
+                    ClickElement(menuItem);
+                }
+
+                currentScope = menuItem;
+                Thread.Sleep(40);
+            }
+
+            return null;
+        }
+
         private AutomationElement? FindWindowByTitle(string title) {
-            return GetProcessWindows().FirstOrDefault(window =>
+            return GetProcessWindowsInSearchOrder().FirstOrDefault(window =>
                 string.Equals(window.Current.Name ?? string.Empty, title, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -915,7 +1197,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindDialogButton(string buttonName) {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 var condition = new AndCondition(
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
                     new PropertyCondition(AutomationElement.NameProperty, buttonName)
@@ -930,7 +1212,7 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindTextContaining(string text) {
-            foreach (var window in GetProcessWindows()) {
+            foreach (var window in GetProcessWindowsInSearchOrder()) {
                 var texts = window.FindAll(
                     TreeScope.Descendants,
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)
@@ -946,6 +1228,14 @@ namespace Edda.Wpf.UI.Tests {
             return null;
         }
 
+        private IEnumerable<AutomationElement> GetProcessWindowsInSearchOrder() {
+            var foregroundHandle = GetForegroundWindow();
+            return GetProcessWindows()
+                .OrderBy(window => new IntPtr(window.Current.NativeWindowHandle) != foregroundHandle)
+                .ThenBy(window => window.Current.IsOffscreen)
+                .ThenByDescending(window => window.Current.NativeWindowHandle);
+        }
+
         private IReadOnlyList<AutomationElement> GetProcessWindows() {
             EnsureLaunched();
             if (appProcess is null || appProcess.HasExited) {
@@ -957,8 +1247,44 @@ namespace Edda.Wpf.UI.Tests {
                 new PropertyCondition(AutomationElement.ProcessIdProperty, appProcess.Id)
             );
 
-            var windowCollection = AutomationElement.RootElement.FindAll(TreeScope.Children, condition);
-            return windowCollection.Cast<AutomationElement>().ToList();
+            var results = new List<AutomationElement>();
+            var seen = new HashSet<int>();
+            var desktopChildren = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
+            foreach (AutomationElement child in desktopChildren) {
+                TryAddWindow(child, results, seen);
+
+                try {
+                    // Native file/folder pickers can be nested under intermediate automation containers
+                    // instead of appearing as direct desktop children.
+                    var nestedWindows = child.FindAll(TreeScope.Descendants, condition);
+                    foreach (AutomationElement nestedWindow in nestedWindows) {
+                        TryAddWindow(nestedWindow, results, seen);
+                    }
+                } catch (COMException) {
+                    // Some desktop child trees do not respond well to descendant enumeration.
+                }
+            }
+
+            return results;
+
+            void TryAddWindow(AutomationElement window, ICollection<AutomationElement> collection, ISet<int> handles) {
+                try {
+                    if (!Equals(window.Current.ControlType, ControlType.Window) || window.Current.ProcessId != appProcess.Id) {
+                        return;
+                    }
+
+                    var handle = window.Current.NativeWindowHandle;
+                    if (handle != 0 && !handles.Add(handle)) {
+                        return;
+                    }
+
+                    collection.Add(window);
+                } catch (COMException) {
+                    // The window disappeared while we were enumerating it.
+                } catch (ElementNotAvailableException) {
+                    // The window disappeared while we were enumerating it.
+                }
+            }
         }
 
         private void ClickElement(AutomationElement element) {
@@ -995,6 +1321,19 @@ namespace Edda.Wpf.UI.Tests {
             mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
         }
 
+        private static void PhysicalClickElement(AutomationElement element) {
+            TrySetFocus(element);
+
+            var bounds = element.Current.BoundingRectangle;
+            var x = (int)(bounds.Left + bounds.Width / 2);
+            var y = (int)(bounds.Top + bounds.Height / 2);
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+        }
+
         private static void TrySetFocus(AutomationElement element) {
             try {
                 element.SetFocus();
@@ -1006,6 +1345,26 @@ namespace Edda.Wpf.UI.Tests {
         private static AutomationElement? FindNamedDescendant(AutomationElement scope, string name) {
             var condition = new PropertyCondition(AutomationElement.NameProperty, name);
             return scope.FindFirst(TreeScope.Descendants, condition);
+        }
+
+        private static AutomationElement? FindListItemContainingText(AutomationElement list, string text) {
+            var allDescendants = list.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            foreach (AutomationElement element in allDescendants) {
+                if (!string.Equals(element.Current.Name ?? string.Empty, text, StringComparison.Ordinal)) {
+                    continue;
+                }
+
+                var current = element;
+                while (current != null) {
+                    if (Equals(current.Current.ControlType, ControlType.ListItem)) {
+                        return current;
+                    }
+
+                    current = TreeWalker.ControlViewWalker.GetParent(current);
+                }
+            }
+
+            return null;
         }
 
         private AutomationElement GetDataGridCell(string dataGridId, int rowIndex, int columnIndex) {
@@ -1078,8 +1437,16 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private void EnsureLaunched() {
-            if (appProcess == null || appProcess.HasExited) {
+            if (appProcess == null) {
                 throw new InvalidOperationException("Driver is not launched. Call Launch() first.");
+            }
+
+            if (appProcess.HasExited) {
+                var testLog = GetTestLog();
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(testLog)
+                        ? "Driver is not launched. Call Launch() first."
+                        : $"Driver is not launched. Call Launch() first.{Environment.NewLine}{testLog}");
             }
         }
 
@@ -1095,7 +1462,7 @@ namespace Edda.Wpf.UI.Tests {
         private void FocusElementWindow(AutomationElement element) {
             var window = FindOwningWindow(element);
             if (window != null) {
-                FocusWindow(window);
+                ActivateWindow(window);
                 return;
             }
 
@@ -1119,22 +1486,72 @@ namespace Edda.Wpf.UI.Tests {
             return null;
         }
 
-        private static void FocusWindow(AutomationElement window) {
+        private static void ActivateWindow(AutomationElement window) {
             var hwnd = new IntPtr(window.Current.NativeWindowHandle);
             if (hwnd == IntPtr.Zero) {
                 return;
             }
 
+            TrySetFocus(window);
             SetForegroundWindow(hwnd);
-            Thread.Sleep(30);
+            Thread.Sleep(60);
+        }
+
+        private static void FocusWindow(AutomationElement window) {
+            ActivateWindow(window);
+
+            var cursorInfo = new CursorInfo { cbSize = (uint)Marshal.SizeOf<CursorInfo>() };
+            var hasCursorPosition = GetCursorInfo(out cursorInfo);
+            var bounds = window.Current.BoundingRectangle;
+            if (bounds.Width > 60 && bounds.Height > 20) {
+                var x = (int)(bounds.Left + Math.Min(120, Math.Max(40, bounds.Width * 0.25)));
+                var y = (int)(bounds.Top + Math.Min(24, Math.Max(8, bounds.Height * 0.05)));
+                SetCursorPos(x, y);
+                Thread.Sleep(20);
+                mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(20);
+                mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(40);
+
+                if (hasCursorPosition) {
+                    SetCursorPos(cursorInfo.ptScreenPos.x, cursorInfo.ptScreenPos.y);
+                    Thread.Sleep(20);
+                }
+            }
+        }
+
+        private string WithDiagnostics(string message) {
+            var diagnostics = GetDiagnostics();
+            return string.IsNullOrWhiteSpace(diagnostics)
+                ? message
+                : $"{message}{Environment.NewLine}{diagnostics}";
+        }
+
+        private string GetDiagnostics() {
+            if (appProcess is not { HasExited: false }) {
+                return GetTestLog();
+            }
+
+            try {
+                var summary = GetWindowDebugSummary();
+                return string.IsNullOrWhiteSpace(summary) ? GetTestLog() : summary;
+            } catch {
+                return GetTestLog();
+            }
         }
 
         private AutomationElement WaitForElement(Func<AutomationElement?> resolver, TimeSpan timeout, string description) {
             var deadline = DateTime.UtcNow + timeout;
             while (DateTime.UtcNow < deadline) {
-                var element = resolver();
-                if (element != null) {
-                    return element;
+                try {
+                    var element = resolver();
+                    if (element != null) {
+                        return element;
+                    }
+                } catch (COMException) {
+                    // Window trees can churn during transitions; retry within the timeout.
+                } catch (ElementNotAvailableException) {
+                    // The automation element disappeared between polls; retry.
                 }
 
                 Thread.Sleep(50);
@@ -1146,8 +1563,14 @@ namespace Edda.Wpf.UI.Tests {
         private bool WaitUntil(Func<bool> condition, TimeSpan timeout) {
             var deadline = DateTime.UtcNow + timeout;
             while (DateTime.UtcNow < deadline) {
-                if (condition()) {
-                    return true;
+                try {
+                    if (condition()) {
+                        return true;
+                    }
+                } catch (COMException) {
+                    // UI Automation can transiently fail while windows are opening or closing.
+                } catch (ElementNotAvailableException) {
+                    // Treat disappearing automation elements as a transient poll failure.
                 }
 
                 Thread.Sleep(40);
@@ -1162,11 +1585,17 @@ namespace Edda.Wpf.UI.Tests {
             }
 
             while (pendingFileSelections.Count > 0) {
-                var dialog = WaitForElement(
-                    FindPickerDialogWindow,
-                    TimeSpan.FromSeconds(6),
-                    "file/folder picker dialog"
-                );
+                AutomationElement dialog;
+                try {
+                    dialog = WaitForElement(
+                        FindPickerDialogWindow,
+                        TimeSpan.FromSeconds(15),
+                        "file/folder picker dialog"
+                    );
+                } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
+                    throw new TimeoutException(WithDiagnostics(ex.Message));
+                }
+
                 var selectedPath = pendingFileSelections.Dequeue();
                 if (string.Equals(selectedPath, PickerCancelSentinel, StringComparison.Ordinal)) {
                     CancelDialog(dialog);
@@ -1197,15 +1626,32 @@ namespace Edda.Wpf.UI.Tests {
             // Focus address/path bar.
             SendCombo(VirtualKeyControl, 0x4C); // Ctrl+L
             Thread.Sleep(80);
+            SendCombo(VirtualKeyControl, 0x41); // Ctrl+A
+            Thread.Sleep(40);
 
             SendText(path);
             SendKey(0x0D); // Enter
-            Thread.Sleep(120);
+            Thread.Sleep(250);
+
+            if (WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(3))) {
+                return;
+            }
+
+            // File pickers are more reliable when we also populate the explicit "File name" field.
+            var fileNameField = FindDialogFileNameField(dialogWindow);
+            if (fileNameField != null) {
+                SetDialogFieldText(fileNameField, path);
+                SendKey(0x0D); // Enter
+                Thread.Sleep(200);
+
+                if (WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(3))) {
+                    return;
+                }
+            }
 
             // Try native accelerator for "Open".
             SendCombo(VirtualKeyAlt, 0x4F); // Alt+O
-
-            if (WaitUntil(() => FindPickerDialogWindow() == null, TimeSpan.FromSeconds(3))) {
+            if (WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(3))) {
                 return;
             }
 
@@ -1215,14 +1661,18 @@ namespace Edda.Wpf.UI.Tests {
                 ClickElement(confirmButton);
             }
 
-            _ = WaitUntil(() => FindPickerDialogWindow() == null, TimeSpan.FromSeconds(3));
+            if (!WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(3))) {
+                throw new InvalidOperationException(
+                    $"Picker dialog '{dialogWindow.Current.Name}' did not close after selecting '{path}'. {DescribeDialog(dialogWindow)}"
+                );
+            }
         }
 
         private void CancelDialog(AutomationElement dialogWindow) {
             FocusWindow(dialogWindow);
 
             SendKey(0x1B); // Escape
-            if (WaitUntil(() => FindPickerDialogWindow() == null, TimeSpan.FromSeconds(2))) {
+            if (WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(2))) {
                 return;
             }
 
@@ -1231,7 +1681,52 @@ namespace Edda.Wpf.UI.Tests {
                 ClickElement(cancelButton);
             }
 
-            _ = WaitUntil(() => FindPickerDialogWindow() == null, TimeSpan.FromSeconds(3));
+            if (!WaitUntil(() => IsDialogClosed(dialogWindow), TimeSpan.FromSeconds(3))) {
+                throw new InvalidOperationException(
+                    $"Picker dialog '{dialogWindow.Current.Name}' did not close after cancellation. {DescribeDialog(dialogWindow)}"
+                );
+            }
+        }
+
+        private void SetDialogFieldText(AutomationElement field, string value) {
+            TrySetFocus(field);
+
+            if (field.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePatternObj)) {
+                ((ValuePattern)valuePatternObj).SetValue(value);
+                return;
+            }
+
+            var bounds = field.Current.BoundingRectangle;
+            var x = (int)(bounds.Left + bounds.Width / 2);
+            var y = (int)(bounds.Top + bounds.Height / 2);
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(40);
+            SendCombo(VirtualKeyControl, 0x41); // Ctrl+A
+            Thread.Sleep(40);
+            SendText(value);
+        }
+
+        private static AutomationElement? FindDialogFileNameField(AutomationElement dialogWindow) {
+            var descendants = dialogWindow.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            foreach (AutomationElement element in descendants) {
+                var isTextEntry = Equals(element.Current.ControlType, ControlType.Edit) ||
+                    Equals(element.Current.ControlType, ControlType.ComboBox);
+                if (!isTextEntry) {
+                    continue;
+                }
+
+                var normalizedName = NormalizeUiLabel(element.Current.Name);
+                var automationId = element.Current.AutomationId ?? string.Empty;
+                if (automationId == "1148" || normalizedName is "filename" or "nazwapliku") {
+                    return element;
+                }
+            }
+
+            return null;
         }
 
         private static AutomationElement? FindDialogConfirmButton(AutomationElement dialogWindow) {
@@ -1240,14 +1735,29 @@ namespace Edda.Wpf.UI.Tests {
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)
             );
 
+            var fallbackCandidates = new List<AutomationElement>();
             foreach (AutomationElement button in buttons) {
                 var normalized = NormalizeUiLabel(button.Current.Name);
-                if (normalized is "open" or "ok" or "select" or "selectfolder") {
+                if (normalized is "open" or "ok" or "select" or "selectfolder" or "choose" or "choosefolder" or "otworz" or "wybierz" or "wybierzfolder" or "zapisz" or "save") {
                     return button;
                 }
+
+                var bounds = button.Current.BoundingRectangle;
+                if (!button.Current.IsEnabled || bounds.Width < 40 || bounds.Height < 20) {
+                    continue;
+                }
+
+                if (normalized is "cancel" or "close" or "anuluj" or "zamknij" or "help" or "pomoc" or "nowyfolder" or "newfolder") {
+                    continue;
+                }
+
+                fallbackCandidates.Add(button);
             }
 
-            return null;
+            return fallbackCandidates
+                .OrderByDescending(button => button.Current.BoundingRectangle.Bottom)
+                .ThenByDescending(button => button.Current.BoundingRectangle.Right)
+                .FirstOrDefault();
         }
 
         private static AutomationElement? FindDialogCancelButton(AutomationElement dialogWindow) {
@@ -1258,7 +1768,7 @@ namespace Edda.Wpf.UI.Tests {
 
             foreach (AutomationElement button in buttons) {
                 var normalized = NormalizeUiLabel(button.Current.Name);
-                if (normalized is "cancel" or "close") {
+                if (normalized is "cancel" or "close" or "anuluj" or "zamknij") {
                     return button;
                 }
             }
@@ -1272,6 +1782,67 @@ namespace Edda.Wpf.UI.Tests {
             }
 
             return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        }
+
+        private static bool IsDialogClosed(AutomationElement dialogWindow) {
+            try {
+                var handle = dialogWindow.Current.NativeWindowHandle;
+                return handle == 0 || dialogWindow.Current.IsOffscreen;
+            } catch (ElementNotAvailableException) {
+                return true;
+            } catch (COMException) {
+                return true;
+            }
+        }
+
+        private static string DescribeDialog(AutomationElement dialogWindow) {
+            var interestingControls = dialogWindow.FindAll(TreeScope.Descendants, Condition.TrueCondition)
+                .Cast<AutomationElement>()
+                .Where(element =>
+                    Equals(element.Current.ControlType, ControlType.Button) ||
+                    Equals(element.Current.ControlType, ControlType.Edit) ||
+                    Equals(element.Current.ControlType, ControlType.ComboBox))
+                .Select(element => {
+                    var controlType = element.Current.ControlType?.ProgrammaticName ?? "unknown";
+                    var name = element.Current.Name ?? string.Empty;
+                    var automationId = element.Current.AutomationId ?? string.Empty;
+                    return $"{controlType}('{name}', id='{automationId}')";
+                })
+                .Distinct(StringComparer.Ordinal)
+                .Take(12);
+
+            return $"Visible controls: {string.Join(", ", interestingControls)}";
+        }
+
+        private static string DescribeWindowDescendants(AutomationElement window) {
+            try {
+                return string.Join(", ",
+                    window.FindAll(TreeScope.Descendants, Condition.TrueCondition)
+                        .Cast<AutomationElement>()
+                        .Select(element => {
+                            var id = element.Current.AutomationId ?? string.Empty;
+                            var name = element.Current.Name ?? string.Empty;
+                            var controlType = element.Current.ControlType?.ProgrammaticName ?? "unknown";
+                            return (id, name, controlType);
+                        })
+                        .Where(element => !string.IsNullOrWhiteSpace(element.id) || !string.IsNullOrWhiteSpace(element.name))
+                        .Take(20)
+                        .Select(element => $"{element.controlType}('{element.name}', id='{element.id}')"));
+            } catch (COMException) {
+                return "descendants unavailable";
+            } catch (ElementNotAvailableException) {
+                return "descendants unavailable";
+            }
+        }
+
+        private void DismissOpenMenus() {
+            try {
+                FocusAppWindow();
+                SendKey(0x1B); // Escape
+                Thread.Sleep(40);
+            } catch {
+                // Best effort cleanup after menu inspection.
+            }
         }
 
         private static void SendKeyboardShortcutCore(string shortcut) {
@@ -1320,10 +1891,10 @@ namespace Edda.Wpf.UI.Tests {
                     SendCombo(0x11, 0x57); // Ctrl + W
                     break;
                 case "ctrl+[":
-                    SendCombo(0x11, 0xDB); // Ctrl + [
+                    SendComboUsingScanCode(0x11, 0xDB); // Ctrl + [
                     break;
                 case "ctrl+]":
-                    SendCombo(0x11, 0xDD); // Ctrl + ]
+                    SendComboUsingScanCode(0x11, 0xDD); // Ctrl + ]
                     break;
                 case "alt+f4":
                     SendCombo(0x12, 0x73); // Alt + F4
@@ -1361,18 +1932,36 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private static void SendCombo(byte modifier, byte key) {
+            var scanCode = (byte)MapVirtualKey(key, 0);
             keybd_event(modifier, 0, 0, UIntPtr.Zero);
-            keybd_event(key, 0, 0, UIntPtr.Zero);
-            keybd_event(key, 0, KeyEventFKeyUp, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(0, scanCode, KeyEventFScancode, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(0, scanCode, KeyEventFScancode | KeyEventFKeyUp, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(modifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
+        }
+
+        private static void SendComboUsingScanCode(byte modifier, byte key) {
+            var scanCode = (byte)MapVirtualKey(key, 0);
+            keybd_event(modifier, 0, 0, UIntPtr.Zero);
+            keybd_event(0, scanCode, KeyEventFScancode, UIntPtr.Zero);
+            keybd_event(0, scanCode, KeyEventFScancode | KeyEventFKeyUp, UIntPtr.Zero);
             keybd_event(modifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
         }
 
         private static void SendCombo(byte firstModifier, byte secondModifier, byte key) {
+            var scanCode = (byte)MapVirtualKey(key, 0);
             keybd_event(firstModifier, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(10);
             keybd_event(secondModifier, 0, 0, UIntPtr.Zero);
-            keybd_event(key, 0, 0, UIntPtr.Zero);
-            keybd_event(key, 0, KeyEventFKeyUp, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(0, scanCode, KeyEventFScancode, UIntPtr.Zero);
+            Thread.Sleep(10);
+            keybd_event(0, scanCode, KeyEventFScancode | KeyEventFKeyUp, UIntPtr.Zero);
+            Thread.Sleep(10);
             keybd_event(secondModifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
+            Thread.Sleep(10);
             keybd_event(firstModifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
         }
 
@@ -1435,10 +2024,13 @@ namespace Edda.Wpf.UI.Tests {
             SetCursorPos(x, y);
             Thread.Sleep(20);
             mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
             mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
             Thread.Sleep(60);
             mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(20);
             mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(40);
         }
 
         private static string ResolveAppExecutablePath() {
@@ -1498,10 +2090,16 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern short VkKeyScan(char ch);

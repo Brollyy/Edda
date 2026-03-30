@@ -32,7 +32,7 @@ namespace Edda.Wpf.UI.Tests {
             driver.WaitForIdle();
             driver.SetTestFileSelection(mapFolder);
             driver.ClickButton(StartupOpenMapButtonId);
-            driver.WaitForIdle();
+            driver.WaitForMainWindow();
         }
 
         internal static string CreateFixtureMapCopy() {

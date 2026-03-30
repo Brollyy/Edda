@@ -144,47 +144,67 @@ namespace Edda {
                 if (e.Key == Key.N) {
                     PauseSong();
                     CreateNewMap();
+                    e.Handled = true;
+                    return;
                 }
                 // open map (Ctrl-O)
                 if (e.Key == Key.O) {
                     PauseSong();
                     OpenMap();
+                    e.Handled = true;
+                    return;
                 }
                 // save map (Ctrl-S)
                 if (e.Key == Key.S) {
                     BackupAndSaveBeatmap();
+                    e.Handled = true;
+                    return;
                 }
                 // import map (Ctrl-I)
                 if (e.Key == Key.I) {
                     PauseSong();
                     ImportMap();
+                    e.Handled = true;
+                    return;
                 }
                 // export map (Ctrl-E)
                 if (e.Key == Key.E) {
                     PauseSong();
                     ExportMap();
+                    e.Handled = true;
+                    return;
                 }
                 // close map (Ctrl-W)
                 if (e.Key == Key.W) {
                     PauseSong();
                     returnToStartMenuOnClose = true;
                     this.Close();
+                    e.Handled = true;
+                    return;
                 }
 
                 // toggle left dock (Ctrl-[)
                 if (e.Key == Key.OemOpenBrackets) {
                     ToggleLeftDock();
+                    e.Handled = true;
+                    return;
                 }
 
                 // toggle right dock (Ctrl-])
                 if (e.Key == Key.OemCloseBrackets) {
                     ToggleRightDock();
+                    e.Handled = true;
+                    return;
                 }
             }
 
             /*====================*
              |  EDITOR SHORTCUTS  |
              *====================*/
+
+            if (!editorIsLoaded || gridController == null || mapEditor == null) {
+                return;
+            }
 
             if (!gridController.isMapDifficultySelected) {
                 return;
@@ -269,6 +289,9 @@ namespace Edda {
         private void AppMainWindow_KeyUp(object sender, KeyEventArgs e) {
             if (e.Key == Key.LeftCtrl || e.Key == Key.RightCtrl) {
                 ctrlKeyDown = false;
+                if (!editorIsLoaded || gridController == null || mapEditor == null) {
+                    return;
+                }
                 TxtGridDivision_LostFocus(sender, null);
             }
             if (e.Key == Key.LeftShift || e.Key == Key.RightShift) {
@@ -282,6 +305,10 @@ namespace Edda {
             /*====================*
              |  EDITOR SHORTCUTS  |
              *====================*/
+
+            if (!editorIsLoaded || gridController == null || mapEditor == null) {
+                return;
+            }
 
             if (!gridController.isMapDifficultySelected) {
                 return;

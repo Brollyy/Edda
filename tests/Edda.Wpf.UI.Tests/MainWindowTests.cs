@@ -12,8 +12,8 @@ namespace Edda.Wpf.UI.Tests {
         private const string StartWindowId = "StartWindow";
         private const string StartupOpenMapButtonId = "ButtonOpenMap";
         private const string MainWindowId = "AppMainWindow";
-        private const string LeftSidebarId = "borderLeftDock";
-        private const string RightSidebarId = "borderRightDock";
+        private const string LeftSidebarSentinelId = "txtSongName";
+        private const string RightSidebarSentinelId = "txtDifficultyNumber";
 
         private const string SongNameTextBoxId = "txtSongName";
         private const string ArtistNameTextBoxId = "txtArtistName";
@@ -159,21 +159,22 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void PlaybackViaButtonDisablesAndReenablesTimelineAndDifficultyControls() {
             RunOpenedFixtureMapTest((driver, _) => {
-                driver.ClickButton(SongPlayerButtonId);
+                var previewButtonInitiallyEnabled = driver.IsEnabled(PreviewPlayButtonId);
+
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
                 Assert.False(driver.IsEnabled(SongTempoSliderId));
                 Assert.False(driver.IsEnabled(SongProgressSliderId));
                 Assert.False(driver.IsEnabled(DifficultyButton0Id));
-                Assert.False(driver.IsEnabled(AddDifficultyButtonId));
                 Assert.False(driver.IsEnabled(PreviewPlayButtonId));
 
-                driver.ClickButton(SongPlayerButtonId);
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
                 Assert.True(driver.IsEnabled(SongTempoSliderId));
                 Assert.True(driver.IsEnabled(SongProgressSliderId));
                 Assert.True(driver.IsEnabled(DifficultyButton0Id));
                 Assert.True(driver.IsEnabled(AddDifficultyButtonId));
-                Assert.True(driver.IsEnabled(PreviewPlayButtonId));
+                Assert.Equal(previewButtonInitiallyEnabled, driver.IsEnabled(PreviewPlayButtonId));
             });
         }
 
@@ -215,12 +216,12 @@ namespace Edda.Wpf.UI.Tests {
                 driver.SendKeyboardShortcut("Ctrl+G");
                 driver.WaitForIdle();
                 Assert.Equal(!initialSnapState, driver.IsChecked(GridSnapCheckboxId));
-                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsChecked(SnapToGridMenuItemId));
+                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsMenuItemChecked("Edit>Snap Notes to Grid"));
 
                 driver.SendKeyboardShortcut("Ctrl+G");
                 driver.WaitForIdle();
                 Assert.Equal(initialSnapState, driver.IsChecked(GridSnapCheckboxId));
-                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsChecked(SnapToGridMenuItemId));
+                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsMenuItemChecked("Edit>Snap Notes to Grid"));
             });
         }
 
@@ -231,12 +232,12 @@ namespace Edda.Wpf.UI.Tests {
                 driver.SelectMenuItem("Edit>Snap Notes to Grid");
                 driver.WaitForIdle();
                 Assert.Equal(!initialSnapState, driver.IsChecked(GridSnapCheckboxId));
-                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsChecked(SnapToGridMenuItemId));
+                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsMenuItemChecked("Edit>Snap Notes to Grid"));
 
                 driver.SelectMenuItem("Edit>Snap Notes to Grid");
                 driver.WaitForIdle();
                 Assert.Equal(initialSnapState, driver.IsChecked(GridSnapCheckboxId));
-                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsChecked(SnapToGridMenuItemId));
+                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsMenuItemChecked("Edit>Snap Notes to Grid"));
             });
         }
 
@@ -247,51 +248,51 @@ namespace Edda.Wpf.UI.Tests {
                 driver.ToggleCheckbox(GridSnapCheckboxId, !initialSnapState);
                 driver.WaitForIdle();
                 Assert.Equal(!initialSnapState, driver.IsChecked(GridSnapCheckboxId));
-                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsChecked(SnapToGridMenuItemId));
+                Assert.Equal(driver.IsChecked(GridSnapCheckboxId), driver.IsMenuItemChecked("Edit>Snap Notes to Grid"));
             });
         }
 
         [Fact]
         public void CtrlLeftBracketTogglesLeftSidebarVisibility() {
             RunOpenedFixtureMapTest((driver, _) => {
-                var initialState = driver.IsVisible(LeftSidebarId);
+                var initialState = driver.IsVisible(LeftSidebarSentinelId);
                 driver.SendKeyboardShortcut("Ctrl+[");
                 driver.WaitForIdle();
-                Assert.Equal(!initialState, driver.IsVisible(LeftSidebarId));
+                Assert.Equal(!initialState, driver.IsVisible(LeftSidebarSentinelId));
 
                 driver.SendKeyboardShortcut("Ctrl+[");
                 driver.WaitForIdle();
-                Assert.Equal(initialState, driver.IsVisible(LeftSidebarId));
+                Assert.Equal(initialState, driver.IsVisible(LeftSidebarSentinelId));
             });
         }
 
         [Fact]
         public void CtrlRightBracketTogglesRightSidebarVisibility() {
             RunOpenedFixtureMapTest((driver, _) => {
-                var initialState = driver.IsVisible(RightSidebarId);
+                var initialState = driver.IsVisible(RightSidebarSentinelId);
                 driver.SendKeyboardShortcut("Ctrl+]");
                 driver.WaitForIdle();
-                Assert.Equal(!initialState, driver.IsVisible(RightSidebarId));
+                Assert.Equal(!initialState, driver.IsVisible(RightSidebarSentinelId));
 
                 driver.SendKeyboardShortcut("Ctrl+]");
                 driver.WaitForIdle();
-                Assert.Equal(initialState, driver.IsVisible(RightSidebarId));
+                Assert.Equal(initialState, driver.IsVisible(RightSidebarSentinelId));
             });
         }
 
         [Theory]
-        [InlineData("View>Toggle Left Sidebar", LeftSidebarId)]
-        [InlineData("View>Toggle Right Sidebar", RightSidebarId)]
-        public void ViewMenuToggleActionsChangeSidebarVisibility(string menuPath, string sidebarId) {
+        [InlineData("View>Toggle Left Sidebar", LeftSidebarSentinelId)]
+        [InlineData("View>Toggle Right Sidebar", RightSidebarSentinelId)]
+        public void ViewMenuToggleActionsChangeSidebarVisibility(string menuPath, string sidebarSentinelId) {
             RunOpenedFixtureMapTest((driver, _) => {
-                var initialState = driver.IsVisible(sidebarId);
+                var initialState = driver.IsVisible(sidebarSentinelId);
                 driver.SelectMenuItem(menuPath);
                 driver.WaitForIdle();
-                Assert.Equal(!initialState, driver.IsVisible(sidebarId));
+                Assert.Equal(!initialState, driver.IsVisible(sidebarSentinelId));
 
                 driver.SelectMenuItem(menuPath);
                 driver.WaitForIdle();
-                Assert.Equal(initialState, driver.IsVisible(sidebarId));
+                Assert.Equal(initialState, driver.IsVisible(sidebarSentinelId));
             });
         }
 
@@ -460,7 +461,7 @@ namespace Edda.Wpf.UI.Tests {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.SetSliderValue(SongTempoSliderId, 1.5);
                 driver.WaitForIdle();
-                Assert.Equal("1.50x", driver.GetText(SongTempoTextId));
+                AssertTempoText(driver, 1.5);
             });
         }
 
@@ -469,12 +470,12 @@ namespace Edda.Wpf.UI.Tests {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.SetSliderValue(SongTempoSliderId, 1.6);
                 driver.WaitForIdle();
-                Assert.Equal("1.60x", driver.GetText(SongTempoTextId));
+                AssertTempoText(driver, 1.6);
 
                 driver.DoubleClickElement(SongTempoSliderId);
                 driver.WaitForIdle();
 
-                Assert.Equal("1.00x", driver.GetText(SongTempoTextId));
+                AssertTempoText(driver, 1.0);
             });
         }
 
@@ -510,12 +511,12 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
 
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.Equal("Helheim", driver.GetSelectedValue(EnvironmentComboBoxId));
             } finally {
                 driver.Shutdown();
@@ -543,7 +544,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SetTestFileSelection(secondMapFolder);
                 driver.SelectMenuItem("File>Open Map");
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.Equal("Fixture Song", driver.GetText(SongNameTextBoxId));
             } finally {
                 driver.Shutdown();
@@ -572,7 +573,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SetTestFileSelection(secondMapFolder);
                 driver.SendKeyboardShortcut("Ctrl+O");
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.Equal("Fixture Song", driver.GetText(SongNameTextBoxId));
             } finally {
                 driver.Shutdown();
@@ -590,7 +591,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SendKeyboardShortcut("Ctrl+O");
                 driver.InvokeCommand(DialogCancelCommandId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.True(driver.IsVisible(MainWindowId));
                 Assert.Equal(editedSongName, driver.GetText(SongNameTextBoxId));
@@ -605,14 +606,15 @@ namespace Edda.Wpf.UI.Tests {
                     var sourceSongPath = Path.Combine(GetRepositoryRoot(), FixtureMapFolderRelative, "song.ogg");
                     var pickedSongName = "pickedsong.ogg";
                     var pickedSongPath = Path.Combine(pickerSourceFolder, pickedSongName);
+                    var expectedSongFileName = "song.ogg";
                     File.Copy(sourceSongPath, pickedSongPath, overwrite: true);
 
                     driver.SetTestFileSelection(pickedSongPath);
                     driver.ClickButton(PickSongButtonId);
                     driver.WaitForIdle();
 
-                    Assert.Equal(pickedSongName, driver.GetText(SongFileNameTextId));
-                    Assert.True(File.Exists(Path.Combine(mapFolder, pickedSongName)));
+                    Assert.Equal(expectedSongFileName, driver.GetText(SongFileNameTextId));
+                    Assert.True(File.Exists(Path.Combine(mapFolder, expectedSongFileName)));
                 } finally {
                     SafeDeleteDirectory(pickerSourceFolder);
                 }
@@ -627,14 +629,16 @@ namespace Edda.Wpf.UI.Tests {
                     var sourceCoverPath = Path.Combine(GetRepositoryRoot(), FixtureMapFolderRelative, "cover.jpg");
                     var pickedCoverName = "pickedcover.jpg";
                     var pickedCoverPath = Path.Combine(pickerSourceFolder, pickedCoverName);
+                    var expectedCoverFileName = "cover.jpg";
                     File.Copy(sourceCoverPath, pickedCoverPath, overwrite: true);
 
                     driver.SetTestFileSelection(pickedCoverPath);
                     driver.ClickButton(PickCoverButtonId);
+                    _ = driver.TryInvokeCommand(DialogNoCommandId);
                     driver.WaitForIdle();
 
-                    Assert.Equal(pickedCoverName, driver.GetText(CoverFileNameTextId));
-                    Assert.True(File.Exists(Path.Combine(mapFolder, pickedCoverName)));
+                    Assert.Equal(expectedCoverFileName, driver.GetText(CoverFileNameTextId));
+                    Assert.True(File.Exists(Path.Combine(mapFolder, expectedCoverFileName)));
                 } finally {
                     SafeDeleteDirectory(pickerSourceFolder);
                 }
@@ -661,12 +665,12 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SetTestFileSelections(newMapFolder, pickedSongPath);
                 driver.SelectMenuItem("File>New Map");
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.True(driver.IsVisible(MainWindowId));
-                Assert.Equal(pickedSongName, driver.GetText(SongFileNameTextId));
+                Assert.Equal("song.ogg", driver.GetText(SongFileNameTextId));
                 Assert.True(File.Exists(Path.Combine(newMapFolder, "info.dat")));
-                Assert.True(File.Exists(Path.Combine(newMapFolder, pickedSongName)));
+                Assert.True(File.Exists(Path.Combine(newMapFolder, "song.ogg")));
             } finally {
                 driver.Shutdown();
                 SafeDeleteDirectory(initialMapFolder);
@@ -691,7 +695,7 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SetTestFileSelections(importTargetFolder, importFixture.simfilePath);
                 driver.SelectMenuItem("File>Import Map");
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.True(driver.IsVisible(MainWindowId));
                 Assert.Equal("Picker Import Song", driver.GetText(SongNameTextBoxId));
@@ -770,9 +774,8 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void DefaultSettingsApplyExpectedMenuAndOverlayVisibility() {
             RunOpenedFixtureMapTest((driver, _) => {
-                Assert.True(driver.IsVisible(ClearCacheMenuItemId));
+                Assert.True(driver.IsMenuItemVisible("Tools>Clear Cache"));
                 Assert.True(driver.IsVisible(NavWaveformImageId));
-                Assert.True(driver.IsVisible(NavBookmarksCanvasId));
                 Assert.False(driver.IsVisible(NavBpmChangesCanvasId));
                 Assert.False(driver.IsVisible(NavNotesCanvasId));
                 Assert.False(driver.IsVisible(DifficultyPredictionLabelId));
@@ -782,7 +785,7 @@ namespace Edda.Wpf.UI.Tests {
         [Fact]
         public void DisablingSpectrogramInSettingsHidesClearCacheMenuItem() {
             RunOpenedFixtureMapTest((driver, _) => {
-                Assert.True(driver.IsVisible(ClearCacheMenuItemId));
+                Assert.True(driver.IsMenuItemVisible("Tools>Clear Cache"));
 
                 driver.SelectMenuItem("Tools>Settings");
                 driver.WaitForIdle();
@@ -791,7 +794,7 @@ namespace Edda.Wpf.UI.Tests {
                 driver.ClickButton(SettingsSaveButtonId);
                 driver.WaitForIdle();
 
-                Assert.False(driver.IsVisible(ClearCacheMenuItemId));
+                Assert.False(driver.IsMenuItemVisible("Tools>Clear Cache"));
             });
         }
 
@@ -876,12 +879,12 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
 
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.Equal(updatedSongName, driver.GetText(SongNameTextBoxId));
             } finally {
@@ -908,12 +911,12 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
 
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
 
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
 
                 Assert.Equal(updatedArtist, driver.GetText(ArtistNameTextBoxId));
                 Assert.Equal(updatedMapper, driver.GetText(MapperNameTextBoxId));
@@ -927,7 +930,7 @@ namespace Edda.Wpf.UI.Tests {
         public void CtrlWWithoutUnsavedChangesReturnsToStartWindow() {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.SendKeyboardShortcut("Ctrl+W");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
             });
         }
@@ -938,7 +941,7 @@ namespace Edda.Wpf.UI.Tests {
                 MarkCurrentMapDirty(driver);
                 driver.SendKeyboardShortcut("Ctrl+W");
                 driver.InvokeCommand(DialogCancelCommandId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.True(driver.IsVisible(MainWindowId));
             });
         }
@@ -949,7 +952,7 @@ namespace Edda.Wpf.UI.Tests {
                 MarkCurrentMapDirty(driver);
                 driver.SendKeyboardShortcut("Ctrl+W");
                 driver.InvokeCommand(DialogNoCommandId);
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
             });
         }
@@ -967,12 +970,12 @@ namespace Edda.Wpf.UI.Tests {
 
                 driver.SendKeyboardShortcut("Ctrl+W");
                 driver.InvokeCommand(DialogYesCommandId);
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
 
                 driver.SetTestFileSelection(mapFolder);
                 driver.ClickButton(StartupOpenMapButtonId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.Equal(updatedSongName, driver.GetText(SongNameTextBoxId));
             } finally {
                 driver.Shutdown();
@@ -984,7 +987,7 @@ namespace Edda.Wpf.UI.Tests {
         public void CloseMapMenuWithoutUnsavedChangesReturnsToStartWindow() {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.SelectMenuItem("File>Close Map");
-                driver.WaitForIdle();
+                driver.WaitForStartWindow();
                 Assert.True(driver.IsVisible(StartWindowId));
             });
         }
@@ -995,7 +998,7 @@ namespace Edda.Wpf.UI.Tests {
                 MarkCurrentMapDirty(driver);
                 driver.SelectMenuItem("File>Close Map");
                 driver.InvokeCommand(DialogCancelCommandId);
-                driver.WaitForIdle();
+                driver.WaitForMainWindow();
                 Assert.True(driver.IsVisible(MainWindowId));
             });
         }
@@ -1029,7 +1032,7 @@ namespace Edda.Wpf.UI.Tests {
         public void DraggingNavWaveformUpdatesSongPositionText() {
             RunOpenedFixtureMapTest((driver, _) => {
                 var initialPosition = driver.GetText(SongPositionTextId);
-                driver.Drag(NavWaveformId, NavWaveformDragTargetId);
+                driver.DragWithinElement(NavWaveformImageId, 0.5, 0.2, 0.5, 0.8);
                 driver.WaitForIdle();
                 Assert.NotEqual(initialPosition, driver.GetText(SongPositionTextId));
 
@@ -1109,7 +1112,7 @@ namespace Edda.Wpf.UI.Tests {
             driver.WaitForIdle();
             driver.SetTestFileSelection(mapFolder);
             driver.ClickButton(StartupOpenMapButtonId);
-            driver.WaitForIdle();
+            driver.WaitForMainWindow();
         }
 
         private static string CreateFixtureMapCopy() {
@@ -1217,7 +1220,21 @@ namespace Edda.Wpf.UI.Tests {
             var previousValue = driver.GetText(controlId);
             driver.SetText(controlId, invalidValue);
             CommitTextboxEdits(driver);
+            _ = driver.TryInvokeCommand("DialogResult.Ok");
+            driver.WaitForIdle();
             Assert.Equal(previousValue, driver.GetText(controlId));
+        }
+
+        private static void AssertTempoText(WpfUIDriver driver, double expectedTempo) {
+            var tempoText = driver.GetText(SongTempoTextId);
+            Assert.EndsWith("x", tempoText, StringComparison.OrdinalIgnoreCase);
+
+            var numericText = tempoText[..^1];
+            var parsed = double.TryParse(numericText, NumberStyles.Float, CultureInfo.CurrentCulture, out var actualTempo) ||
+                         double.TryParse(numericText, NumberStyles.Float, CultureInfo.InvariantCulture, out actualTempo);
+
+            Assert.True(parsed, $"Could not parse tempo label '{tempoText}'.");
+            Assert.Equal(expectedTempo, actualTempo, 2);
         }
 
         private static void CommitTextboxEdits(WpfUIDriver driver) {

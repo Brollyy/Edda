@@ -300,6 +300,9 @@ namespace Edda {
             } else {
                 return;
             }
+            if (file == null) {
+                return;
+            }
 
             RagnarockMap beatmap = new RagnarockMap(importMapFolder, true);
 
@@ -488,6 +491,9 @@ namespace Edda {
             if (d.ShowDialog() != CommonFileDialogResult.Ok) {
                 return;
             }
+            if (d.FileName == null) {
+                return;
+            }
 
             SaveBeatmap();
 
@@ -652,6 +658,7 @@ namespace Edda {
             txtGridDivision.IsEnabled = false;
             txtGridSpacing.IsEnabled = false;
             checkWaveform.IsEnabled = false;
+            btnAddDifficulty.IsEnabled = false;
             btnDeleteDifficulty.IsEnabled = false;
             btnSongPlayer.IsEnabled = false;
             sliderSongProgress.IsEnabled = false;
@@ -933,6 +940,9 @@ namespace Edda {
             }
 
             string sourceFile = d.FileName;
+            if (sourceFile == null) {
+                return;
+            }
 
             if (!Helper.IsValidCoverFile(sourceFile)) {
                 var coverTrimResult = MessageBox.Show(this, $"Ragnarock will only display square cover images. Do you want Edda to create and use a cropped version of the selected image instead?", "Warning", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
@@ -1043,8 +1053,8 @@ namespace Edda {
             }
 
             // update states of add/delete buttons
-            btnDeleteDifficulty.IsEnabled = (mapEditor.numDifficulties > 1);
-            btnAddDifficulty.IsEnabled = (mapEditor.numDifficulties < 3);
+            btnDeleteDifficulty.IsEnabled = !songIsPlaying && (mapEditor.numDifficulties > 1);
+            btnAddDifficulty.IsEnabled = !songIsPlaying && (mapEditor.numDifficulties < 3);
         }
         private void SwitchDifficultyMap(int indx) {
             PauseSong();
@@ -1136,10 +1146,11 @@ namespace Edda {
             vorbisStream.Dispose();
 
             // do file I/O
-            Helper.FileDeleteIfExists(prevSongFile);
+            gridController?.UnloadWaveforms();
+            RetryDeleteFile(prevSongFile);
 
             // can't copy over an existing file
-            Helper.FileDeleteIfExists(songFilePath);
+            RetryDeleteFile(songFilePath);
             File.Copy(file, songFilePath);
 
             LoadSong();
@@ -1156,6 +1167,19 @@ namespace Edda {
             SaveBeatmap();
 
             return true;
+
+            static void RetryDeleteFile(string path) {
+                for (var attempt = 0; ; attempt++) {
+                    try {
+                        Helper.FileDeleteIfExists(path);
+                        return;
+                    } catch (IOException) when (attempt < 39) {
+                        Thread.Sleep(50);
+                    } catch (UnauthorizedAccessException) when (attempt < 39) {
+                        Thread.Sleep(50);
+                    }
+                }
+            }
         }
         private void LoadSong() {
             var songPath = Path.Combine(mapEditor.mapFolder, (string)mapEditor.GetMapValue("_songFilename"));
@@ -1215,15 +1239,22 @@ namespace Edda {
             }
         }
         private void UnloadSong() {
+            if (songPlayer != null) {
+                var oldSongPlayer = songPlayer;
+                songPlayer = null;
+                oldSongPlayer.Stop();
+                oldSongPlayer.Dispose();
+            }
+            songChannel = null;
+            if (songTempoStream != null) {
+                var oldSongTempoStream = songTempoStream;
+                songTempoStream = null;
+                oldSongTempoStream.Dispose();
+            }
             if (songStream != null) {
                 var oldSongStream = songStream;
                 songStream = null;
                 oldSongStream.Dispose();
-            }
-            if (songPlayer != null) {
-                var oldSongPlayer = songPlayer;
-                songPlayer = null;
-                oldSongPlayer.Dispose();
             }
         }
         private void PlaySong() {
@@ -1250,6 +1281,8 @@ namespace Edda {
             btnChangeDifficulty0.IsEnabled = false;
             btnChangeDifficulty1.IsEnabled = false;
             btnChangeDifficulty2.IsEnabled = false;
+            btnAddDifficulty.IsEnabled = false;
+            btnDeleteDifficulty.IsEnabled = false;
             scrollEditor.IsEnabled = false;
             sliderSongProgress.IsEnabled = false;
             borderNavWaveform.IsEnabled = false;
@@ -1318,6 +1351,7 @@ namespace Edda {
             borderNavWaveform.IsEnabled = true;
             sliderSongTempo.IsEnabled = true;
             btnCustomizeNavBar.IsEnabled = true;
+            UpdateDifficultyButtons();
             songPreviewController?.EnablePreviewButton();
 
             // reset scroll animation

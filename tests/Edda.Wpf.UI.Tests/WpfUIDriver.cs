@@ -23,6 +23,7 @@ namespace Edda.Wpf.UI.Tests {
             "txtSongName"
         };
         private const string PickerCancelSentinel = "__EDDA_TEST_PICKER_CANCEL__";
+        private const string PickerQueueFileEnvironmentVariable = "EDDA_TEST_PICKER_QUEUE_FILE";
         private static readonly string[] PickerDialogTitles = {
             "Select your map's containing folder",
             "Select an empty folder to store your map",
@@ -50,8 +51,8 @@ namespace Edda.Wpf.UI.Tests {
         private readonly TimeSpan defaultTimeout = TimeSpan.FromSeconds(15);
 
         private Process? appProcess;
-        private readonly Queue<string> pendingFileSelections = new();
         private readonly Dictionary<string, string?> launchEnvironmentOverrides = new(StringComparer.OrdinalIgnoreCase);
+        private string? pickerSelectionQueueFilePath;
         private string? testProfileRoot;
 
         public void SetLaunchEnvironmentVariable(string key, string? value) {
@@ -75,8 +76,10 @@ namespace Edda.Wpf.UI.Tests {
             testProfileRoot = Path.Combine(Path.GetTempPath(), "Edda-WpfUiTests", Guid.NewGuid().ToString("N"));
             var appDataRoot = Path.Combine(testProfileRoot, "AppData", "Roaming");
             var localAppDataRoot = Path.Combine(testProfileRoot, "AppData", "Local");
+            pickerSelectionQueueFilePath = Path.Combine(testProfileRoot, "picker-queue.txt");
             Directory.CreateDirectory(appDataRoot);
             Directory.CreateDirectory(localAppDataRoot);
+            File.WriteAllText(pickerSelectionQueueFilePath, string.Empty);
 
             var startInfo = new ProcessStartInfo {
                 UseShellExecute = false
@@ -90,6 +93,7 @@ namespace Edda.Wpf.UI.Tests {
             startInfo.WorkingDirectory = Path.GetDirectoryName(appPath) ?? Directory.GetCurrentDirectory();
             startInfo.Environment["APPDATA"] = appDataRoot;
             startInfo.Environment["LOCALAPPDATA"] = localAppDataRoot;
+            startInfo.Environment[PickerQueueFileEnvironmentVariable] = pickerSelectionQueueFilePath;
             foreach (var (key, value) in launchEnvironmentOverrides) {
                 startInfo.Environment[key] = value ?? string.Empty;
             }
@@ -132,8 +136,8 @@ namespace Edda.Wpf.UI.Tests {
 
             appProcess?.Dispose();
             appProcess = null;
-            pendingFileSelections.Clear();
             launchEnvironmentOverrides.Clear();
+            pickerSelectionQueueFilePath = null;
 
             if (!string.IsNullOrWhiteSpace(testProfileRoot) && Directory.Exists(testProfileRoot)) {
                 try {
@@ -983,8 +987,7 @@ namespace Edda.Wpf.UI.Tests {
                 throw new ArgumentException("Test file selection path cannot be empty.", nameof(path));
             }
 
-            pendingFileSelections.Clear();
-            pendingFileSelections.Enqueue(Path.GetFullPath(path));
+            WritePickerSelections(Path.GetFullPath(path));
         }
 
         public void SetTestFileSelections(params string[] paths) {
@@ -1000,16 +1003,12 @@ namespace Edda.Wpf.UI.Tests {
                 return Path.GetFullPath(path);
             }).ToArray();
 
-            pendingFileSelections.Clear();
-            foreach (var path in normalizedPaths) {
-                pendingFileSelections.Enqueue(path);
-            }
+            WritePickerSelections(normalizedPaths);
         }
 
         public void SetTestPickerCancellation() {
             EnsureLaunched();
-            pendingFileSelections.Clear();
-            pendingFileSelections.Enqueue(PickerCancelSentinel);
+            WritePickerSelections(PickerCancelSentinel);
         }
 
         public void WaitForMainWindow(TimeSpan? timeout = null) {
@@ -1580,29 +1579,8 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private void TryHandlePendingPickerDialogs() {
-            if (pendingFileSelections.Count == 0) {
-                return;
-            }
-
-            while (pendingFileSelections.Count > 0) {
-                AutomationElement dialog;
-                try {
-                    dialog = WaitForElement(
-                        FindPickerDialogWindow,
-                        TimeSpan.FromSeconds(15),
-                        "file/folder picker dialog"
-                    );
-                } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
-                    throw new TimeoutException(WithDiagnostics(ex.Message));
-                }
-
-                var selectedPath = pendingFileSelections.Dequeue();
-                if (string.Equals(selectedPath, PickerCancelSentinel, StringComparison.Ordinal)) {
-                    CancelDialog(dialog);
-                } else {
-                    SelectPathInDialog(dialog, selectedPath);
-                }
-            }
+            // The application consumes queued picker selections directly through
+            // EDDA_TEST_PICKER_QUEUE_FILE, so no external UI Automation is needed here.
         }
 
         private AutomationElement? FindPickerDialogWindow() {
@@ -2033,6 +2011,14 @@ namespace Edda.Wpf.UI.Tests {
             Thread.Sleep(40);
         }
 
+        private void WritePickerSelections(params string[] selections) {
+            if (string.IsNullOrWhiteSpace(pickerSelectionQueueFilePath)) {
+                throw new InvalidOperationException("Picker selection queue file is not initialized.");
+            }
+
+            File.WriteAllLines(pickerSelectionQueueFilePath, selections);
+        }
+
         private static string ResolveAppExecutablePath() {
             var envPath = Environment.GetEnvironmentVariable("EDDA_WPF_EXE");
             if (!string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath) &&
@@ -2048,6 +2034,10 @@ namespace Edda.Wpf.UI.Tests {
                 }
 
                 var candidates = new[] {
+                    Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Debug", "net9.0-windows", "win-x64", "Edda.exe"),
+                    Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Release", "net9.0-windows", "win-x64", "Edda.exe"),
+                    Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Debug", "net9.0-windows", "win-x64", "Edda.dll"),
+                    Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Release", "net9.0-windows", "win-x64", "Edda.dll"),
                     Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Debug", "net8.0-windows", "win-x64", "Edda.exe"),
                     Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Release", "net8.0-windows", "win-x64", "Edda.exe"),
                     Path.Combine(repoRoot, "src", "Edda.Wpf", "bin", "Debug", "net8.0-windows", "win-x64", "Edda.dll"),

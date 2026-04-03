@@ -29,7 +29,7 @@ namespace Edda {
             try {
                 if (UserSettings.GetBoolForKey(UserSettingsKey.CheckForUpdates)) {
                     //#if !DEBUG
-                    Helper.CheckForUpdates();
+                    WpfHelper.CheckForUpdates();
                     //#endif
                 }
             } catch {

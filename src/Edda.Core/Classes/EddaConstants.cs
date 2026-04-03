@@ -1,13 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Windows;
-using System.Windows.Media;
 
 namespace Edda.Const {
 
     using DrawingColor = System.Drawing.Color;
-    using MediaColor = Color;
+    static class ColorValue {
+        public static string ToArgbHex(DrawingColor color) {
+            return $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+        }
+    }
+
     public static class Program {
 
         public const string Name = "Edda";
@@ -153,7 +156,7 @@ namespace Edda.Const {
 
         // Difficulty
         public static class Difficulty {
-            public static string SelectedColour => Colors.LightSkyBlue.ToString();
+            public static string SelectedColour => ColorValue.ToArgbHex(DrawingColor.LightSkyBlue);
             public const int LevelMin = 1;
             public const int LevelMax = 99;
         }
@@ -161,17 +164,17 @@ namespace Edda.Const {
         // Bookmarks
         public const double NavWaveformOpacity = 0.75;
         public static class GridPreviewLine {
-            public static string Colour => Colors.FloralWhite.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.FloralWhite);
             public const double Thickness = 1.0;
         }
         public static class NavPreviewLine {
-            public static string Colour => Colors.FloralWhite.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.FloralWhite);
             public const double Thickness = 1;
         }
         public static class NavBookmark {
-            public static string DefaultName = "Bookmark";
-            public static string Colour => Colors.SkyBlue.ToString();
-            public static string NameColour => Colors.SkyBlue.ToString();
+            public const string DefaultName = "Bookmark";
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.SkyBlue);
+            public static string NameColour => ColorValue.ToArgbHex(DrawingColor.SkyBlue);
             public const double Thickness = 1;
             public const double NameSize = 10;
             public const double NamePadding = 1;
@@ -179,17 +182,17 @@ namespace Edda.Const {
             public const double Opacity = 1;
         }
         public static class GridBookmark {
-            public static string Colour => Colors.DeepSkyBlue.ToString();
-            public static string NameColour => Colors.DeepSkyBlue.ToString();
-            public static string BackgroundColour => Colors.DeepSkyBlue.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.DeepSkyBlue);
+            public static string NameColour => ColorValue.ToArgbHex(DrawingColor.DeepSkyBlue);
+            public static string BackgroundColour => ColorValue.ToArgbHex(DrawingColor.DeepSkyBlue);
             public const double Thickness = 3;
             public const double NameSize = 11;
             public const double NamePadding = 3;
             public const double Opacity = 0.75;
         }
         public static class NavBPMChange {
-            public static string Colour => Colors.Violet.ToString();
-            public static string LabelColour => Colors.Violet.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.Violet);
+            public static string LabelColour => ColorValue.ToArgbHex(DrawingColor.Violet);
             public const double Thickness = 1;
             public const double LabelSize = 10;
             public const double LabelPadding = 1;
@@ -197,25 +200,23 @@ namespace Edda.Const {
             public const double Opacity = 1;
         }
         public static class GridBPMChange {
-            public static string Colour => Colors.MediumPurple.ToString();
-            public static string NameColour => Colors.MediumPurple.ToString();
-            public static string BackgroundColour => Colors.MediumPurple.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.MediumPurple);
+            public static string NameColour => ColorValue.ToArgbHex(DrawingColor.MediumPurple);
+            public static string BackgroundColour => ColorValue.ToArgbHex(DrawingColor.MediumPurple);
             public const double Thickness = 3;
             public const double NameSize = 11;
             public const double NamePadding = 3;
             public const double Opacity = 0.75;
         }
         public static class NavNote {
-            public static string Colour => MediaColor.FromRgb(210, 210, 210).ToString();
-            public static string HighlightColour => Colors.Gold.ToString();
+            public static string Colour => ColorValue.ToArgbHex(DrawingColor.FromArgb(210, 210, 210));
+            public static string HighlightColour => ColorValue.ToArgbHex(DrawingColor.Gold);
             public const double Size = 3;
             public const double ColumnGap = 4;
         }
         public static class Stats {
-            public static readonly MediaColor Colour = Colors.Black;
-            public static readonly MediaColor WarningColour = Colors.Crimson;
-            public static readonly FontWeight FontWeight = FontWeights.Regular;
-            public static readonly FontWeight WarningFontWeight = FontWeights.Bold;
+            public static DrawingColor Colour => DrawingColor.Black;
+            public static DrawingColor WarningColour => DrawingColor.Crimson;
         }
 
         // Waveform drawing
@@ -225,7 +226,7 @@ namespace Edda.Const {
             public const int MaxDimension = 65535;
             public const double ThicknessWPF = 1;
             public const bool UseGDI = false;
-            public static MediaColor ColourWPF => MediaColor.FromArgb(180, 0, 0, 255);
+            public static string ColourWPF => ColorValue.ToArgbHex(DrawingColor.FromArgb(180, 0, 0, 255));
             public static DrawingColor ColourGDI => DrawingColor.FromArgb(180, 0, 0, 255);
         }
 
@@ -311,8 +312,8 @@ namespace Edda.Const {
     }
 
     public static class DifficultyPrediction {
-        public static readonly MediaColor Colour = Colors.Black;
-        public static readonly MediaColor WarningColour = Colors.OrangeRed;
+        public static DrawingColor Colour => DrawingColor.Black;
+        public static DrawingColor WarningColour => DrawingColor.OrangeRed;
         public static class SupportedAlgorithms {
             public const string PKBeam = "PKBeam_ML";
             public const string Nytilde = "Nytilde_ML";

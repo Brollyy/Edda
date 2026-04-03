@@ -334,8 +334,8 @@ public class EditorGridController : IDisposable {
     public void InitWaveforms(string songPath) {
         UnloadWaveforms();
         audioSpectrogram = new VorbisSpectrogramGenerator(songPath, spectrogramCache, spectrogramType, spectrogramQuality, spectrogramFrequency, spectrogramColormap, spectrogramFlipped);
-        audioWaveform = new VorbisWaveformGenerator(songPath, Editor.Waveform.ColourWPF);
-        navWaveform = new VorbisWaveformGenerator(songPath, (MediaColor)(ColorConverter.ConvertFromString(parentWindow.GetUserSetting(UserSettingsKey.NavWaveformColor)) ?? Editor.Waveform.ColourWPF));
+        audioWaveform = new VorbisWaveformGenerator(songPath, WpfHelper.ColorFromString(Editor.Waveform.ColourWPF, Editor.Waveform.ColourWPF));
+        navWaveform = new VorbisWaveformGenerator(songPath, WpfHelper.ColorFromString(parentWindow.GetUserSetting(UserSettingsKey.NavWaveformColor), Editor.Waveform.ColourWPF));
     }
     public void RefreshSpectrogramWaveform() {
         audioSpectrogram?.InitSettings(spectrogramCache, spectrogramType, spectrogramQuality, spectrogramFrequency, spectrogramColormap, spectrogramFlipped);
@@ -382,7 +382,7 @@ public class EditorGridController : IDisposable {
     internal void DrawNavWaveform() {
         Task.Run(() => {
             DateTime before = DateTime.Now;
-            navWaveform.ChangeColor((MediaColor)(ColorConverter.ConvertFromString(parentWindow.GetUserSetting(UserSettingsKey.NavWaveformColor)) ?? Editor.Waveform.ColourWPF));
+            navWaveform.ChangeColor(WpfHelper.ColorFromString(parentWindow.GetUserSetting(UserSettingsKey.NavWaveformColor), Editor.Waveform.ColourWPF));
             ImageSource bmp = navWaveform.Draw(borderNavWaveform.ActualHeight, colWaveformVertical.ActualWidth);
             Trace.WriteLine($"INFO: Drew nav waveform in {(DateTime.Now - before).TotalSeconds} sec");
 
@@ -1218,7 +1218,7 @@ public class EditorGridController : IDisposable {
         var lastBPMChange = mapEditor.GetLastBeatChange(beat);
         double beatNormalised = beat - lastBPMChange.globalBeat;
         beatNormalised /= mapEditor.GetGridLength(lastBPMChange.BPM, 1);
-        return Helper.BitmapImageForBeat(beatNormalised, highlight);
+        return WpfHelper.BitmapImageForBeat(beatNormalised, highlight);
     }
     private Label CreateBookmarkLabel(Bookmark b) {
         if (!double.TryParse(parentWindow.GetUserSetting(UserSettingsKey.NavBookmarkShadowOpacity), out var shadowOpacity)) {

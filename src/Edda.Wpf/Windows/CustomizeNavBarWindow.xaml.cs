@@ -26,8 +26,8 @@ namespace Edda {
             this.userSettings = userSettings;
 
             CheckWaveform.IsChecked = userSettings.GetBoolForKey(UserSettingsKey.EnableNavWaveform);
-            var waveformColor = userSettings.GetValueForKey(UserSettingsKey.NavWaveformColor) ?? Editor.Waveform.ColourWPF.ToString();
-            ColorWaveform.SelectedColor = (Color)ColorConverter.ConvertFromString(waveformColor);
+            var waveformColor = userSettings.GetValueForKey(UserSettingsKey.NavWaveformColor) ?? Editor.Waveform.ColourWPF;
+            ColorWaveform.SelectedColor = WpfHelper.ColorFromString(waveformColor, Editor.Waveform.ColourWPF);
             ToggleWaveformColorIsEnabled();
             ColorWaveformColorChangedDebounce = Observable
                 .FromEventPattern<RoutedEventArgs>(ColorWaveform, nameof(PortableColorPicker.ColorChanged))
@@ -124,7 +124,7 @@ namespace Edda {
         }
         private void ColorWaveform_ColorChanged(object sender, RoutedEventArgs e) {
             if (doneInit) {
-                userSettings.SetValueForKey(UserSettingsKey.NavWaveformColor, ColorWaveform.SelectedColor.ToString() ?? Editor.Waveform.ColourWPF.ToString());
+                userSettings.SetValueForKey(UserSettingsKey.NavWaveformColor, ColorWaveform.SelectedColor.ToString() ?? Editor.Waveform.ColourWPF);
                 UpdateWaveform();
             }
         }
@@ -203,7 +203,7 @@ namespace Edda {
         }
 
         private void ButtonResetWaveform_Click(object sender, RoutedEventArgs e) {
-            ColorWaveform.SelectedColor = Editor.Waveform.ColourWPF;
+            ColorWaveform.SelectedColor = WpfHelper.ColorFromString(Editor.Waveform.ColourWPF, Editor.Waveform.ColourWPF);
             UpdateWaveform();
         }
 

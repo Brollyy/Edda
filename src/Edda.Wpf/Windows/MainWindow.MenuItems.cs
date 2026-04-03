@@ -150,7 +150,7 @@ namespace Edda {
         // Help
         private void MenuItemCheckUpdates_Click(object sender, RoutedEventArgs e) {
             try {
-                if (!Helper.CheckForUpdates()) {
+                if (!WpfHelper.CheckForUpdates()) {
                     MessageBox.Show(this, $"You are already using the latest version of Edda.", "No updates found", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             } catch {

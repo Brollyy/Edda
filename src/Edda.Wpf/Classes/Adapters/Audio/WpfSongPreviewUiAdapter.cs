@@ -22,7 +22,7 @@ namespace Edda {
 
         public void SetPreviewPlaying(bool isPlaying) {
             mainWindow.btnPlayPreview.Tag = isPlaying ? 1 : 0;
-            mainWindow.imgPreviewButton.Source = Helper.BitmapGenerator(isPlaying ? "stopButton.png" : "playButton.png");
+            mainWindow.imgPreviewButton.Source = WpfHelper.BitmapGenerator(isPlaying ? "stopButton.png" : "playButton.png");
         }
 
         public void SetPreviewButtonEnabled(bool isEnabled) {

@@ -1,19 +1,11 @@
 ﻿using Edda.Classes.MapEditorNS.NoteNS;
 using Edda.Const;
-using Microsoft.WindowsAPICodePack.Dialogs;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
 using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Net.Cache;
-using System.Net.Http;
 using System.Text.RegularExpressions;
-using System.Windows;
-using System.Windows.Media.Imaging;
 
 public partial class Helper {
 
@@ -127,23 +119,6 @@ public partial class Helper {
         }
         return BeatmapDefaults.CoverFilename + coverExtension;
     }
-    public static bool IsValidCoverFile(string fileName) {
-        BitmapImage img = BitmapGenerator(new Uri(fileName));
-        return img.PixelWidth == img.PixelHeight;
-    }
-
-    public static string TrimCoverFile(string fileName) {
-        using Image src = Image.FromFile(fileName);
-        var size = Math.Min(src.Width, src.Height);
-        var cropRect = new Rectangle((src.Width - size) / 2, (src.Height - size) / 2, size, size);
-        using Bitmap target = new(size, size);
-        using Graphics g = Graphics.FromImage(target);
-        g.DrawImage(src, new Rectangle(0, 0, size, size), cropRect, GraphicsUnit.Pixel);
-        string newFileName = Path.GetTempPath() + Path.GetRandomFileName() + Path.GetExtension(fileName);
-        target.Save(newFileName, System.Drawing.Imaging.ImageFormat.Jpeg);
-        return newFileName;
-    }
-
     public static string DefaultRagnarockMapPath() {
         string docPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         string ragPath = Path.Combine(docPath, "Ragnarock");
@@ -165,49 +140,6 @@ public partial class Helper {
             }
         }
         return output;
-    }
-    public static string ChooseNewMapFolder() {
-        return ChooseNewMapFolder(GetRagnarockMapFolder());
-    }
-    public static string ChooseNewMapFolder(string initialDirectory) {
-        // select folder for map
-        var d2 = new CommonOpenFileDialog();
-        d2.Title = "Select an empty folder to store your map";
-        d2.IsFolderPicker = true;
-        d2.InitialDirectory = initialDirectory;
-        if (d2.ShowDialog() != CommonFileDialogResult.Ok) {
-            return null;
-        }
-
-        // check folder name is appropriate
-        var folderName = new FileInfo(d2.FileName).Name;
-        if (!Regex.IsMatch(folderName, @"^[a-zA-Z]+$")) {
-            MessageBox.Show("The folder name cannot contain spaces or non-alphabetic characters.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            return null;
-        }
-
-        // check folder is empty
-        if (Directory.GetFiles(d2.FileName).Length > 0) {
-            if (MessageBoxResult.No == MessageBox.Show("The specified folder is not empty. Continue anyway?", "Warning", MessageBoxButton.YesNo, MessageBoxImage.Warning)) {
-                return null;
-            }
-        }
-        return d2.FileName;
-    }
-    public static string ChooseOpenMapFolder() {
-        return ChooseOpenMapFolder(GetRagnarockMapFolder());
-    }
-    public static string ChooseOpenMapFolder(string initialDirectory) {
-        // select folder for map
-        // TODO: this dialog is sometimes hangs, is there a better way to select a folder?
-        var d2 = new CommonOpenFileDialog();
-        d2.Title = "Select your map's containing folder";
-        d2.IsFolderPicker = true;
-        d2.InitialDirectory = initialDirectory;
-        if (d2.ShowDialog() != CommonFileDialogResult.Ok) {
-            return null;
-        }
-        return d2.FileName;
     }
     public static void FileDeleteIfExists(string path) {
         if (File.Exists(path)) {
@@ -267,69 +199,6 @@ public partial class Helper {
     }
 
     // Network
-    public static bool CheckForUpdates() {
-
-        // turn version string into number for comparison purposes
-        /* 
-         *  e.g. 
-         *  
-         *  0.4.5   => 45
-         *  0.4.5.1 => 45.1
-         *  1.0     => 100
-         *  1.0.0.1 => 100.1
-        */
-        double numerifyVersionString(string version) {
-            string numerify = "";
-            int counter = 0;
-            foreach (var character in version) {
-                if (counter == 3) {
-                    numerify += '.';
-                    counter++;
-                }
-                if (character >= '0' && character <= '9') {
-                    numerify += character;
-                    counter++;
-                }
-
-            }
-            while (counter < 3) {
-                numerify += '0';
-                counter++;
-            }
-            return Helper.DoubleParseInvariant(numerify);
-        }
-
-        bool isBeta(string version) {
-            return version.Contains('b') || version.Contains('B');
-        }
-
-        HttpClient client = new HttpClient();
-        client.DefaultRequestHeaders.Add("User-Agent", "Edda-" + Program.DisplayVersionString);
-        string res = client.GetStringAsync(Program.ReleasesAPI).Result;
-
-        // get most recent non-beta release
-        var resJSON = JArray.Parse(res);
-        var i = 0;
-
-        // beta versions should show all versions as updates
-        if (!isBeta(Program.VersionString)) {
-            // non-beta versions should not show beta versions as updates
-            while (isBeta((string)resJSON[i]["tag_name"])) {
-                i++;
-            }
-        }
-        var newestRelease = resJSON[i];
-
-        // check if this release is a newer version
-        string newestVersion = (string)newestRelease["tag_name"];
-        string currentVersion = "v" + Program.VersionString;
-        if (numerifyVersionString(newestVersion) > numerifyVersionString(currentVersion)) {
-            MessageBox.Show($"A new release of Edda is available.\n\nNewest version: {newestVersion}\nCurrent version: {currentVersion}", "New release available", MessageBoxButton.OK, MessageBoxImage.Information);
-            return true;
-        } else {
-            return false;
-        }
-    }
     public static void OpenWebUrl(string url) {
         Process proc = new Process();
         proc.StartInfo.UseShellExecute = true;
@@ -338,13 +207,6 @@ public partial class Helper {
     }
 
     // Misc
-    public static Window GetFirstWindow<T>() where T : Window {
-        var wins = Application.Current.Windows.OfType<T>();
-        if (wins.Any()) {
-            return wins.First();
-        }
-        return null;
-    }
     // TODO figure out a better way than this
     public static string UidGenerator(Note n) {
         return $"Note({Math.Round(n.beat, 4)},{n.col})";
@@ -361,73 +223,5 @@ public partial class Helper {
     }
     public static string NameGenerator(Note n) {
         return "N" + n.GetHashCode().ToString().Replace("-", "_"); // '-' is an invalid character for identifiers
-    }
-    public static BitmapImage BitmapGenerator(Uri u, bool ignoreCache = false) {
-        var b = new BitmapImage();
-        b.BeginInit();
-        if (ignoreCache) {
-            b.CacheOption = BitmapCacheOption.None;
-            b.UriCachePolicy = new RequestCachePolicy(RequestCacheLevel.BypassCache);
-        }
-        b.CacheOption = BitmapCacheOption.OnLoad;
-        if (ignoreCache) {
-            b.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-        }
-        b.UriSource = u;
-        b.EndInit();
-        b.Freeze();
-        return b;
-    }
-    public static Uri UriForResource(string file) {
-        return new Uri($"pack://application:,,,/resources/{file}");
-    }
-    public static BitmapImage BitmapGenerator(string resourceFile) {
-        return BitmapGenerator(UriForResource(resourceFile));
-    }
-    public static BitmapImage BitmapImageForBeat(double beat, bool isHighlighted = false) {
-        const int m = Editor.GridDivisionMax * 6;
-        int fracBeat = (int)Math.Round(beat * m) % m; // closest approximation of numerator with given denominator
-        string runeStr = fracBeat switch {
-            0 => "1",
-            m * 1 / 4 => "14",
-            m * 1 / 3 => "13",
-            m * 5 / 6 => "13",
-            m * 1 / 2 => "12",
-            m * 2 / 3 => "23",
-            m * 1 / 6 => "23",
-            m * 3 / 4 => "34",
-            _ => "X"
-        };
-        return BitmapGenerator($"rune{runeStr}{(isHighlighted ? "highlight" : "")}.png");
-    }
-
-    // https://stackoverflow.com/questions/329355/cannot-delete-directory-with-directory-deletepath-true
-    public static void DeleteDirectory(string target_dir) {
-        string[] files = Directory.GetFiles(target_dir);
-        string[] dirs = Directory.GetDirectories(target_dir);
-
-        foreach (string file in files) {
-            File.SetAttributes(file, FileAttributes.Normal);
-            File.Delete(file);
-        }
-
-        foreach (string dir in dirs) {
-            DeleteDirectory(dir);
-        }
-
-        try {
-            Directory.Delete(target_dir, false);
-        } catch (IOException ex) {
-            Trace.WriteLine(ex);
-            ShowOneDriveWarning();
-        }
-    }
-    public static void ShowOneDriveWarning() {
-        MessageBox.Show(
-            "There's been an issue with managing map files, likely due to OneDrive or similar application blocking Edda from accessing the files.\n\nPlease consider disabling OneDrive on the folder where the map is stored, to avoid losing work.",
-            "Warning",
-            MessageBoxButton.OK,
-            MessageBoxImage.Warning
-        );
     }
 }

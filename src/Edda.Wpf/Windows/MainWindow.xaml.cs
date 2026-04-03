@@ -292,14 +292,7 @@ namespace Edda {
             }
 
             // select simfile to import
-            string file = null;
-            var d = new Microsoft.Win32.OpenFileDialog() { Filter = "StepMania simfile|*.sm;*.ssc" };
-            d.Title = "Select a simfile to import";
-            if (d.ShowDialog() == true) {
-                file = d.FileName;
-            } else {
-                return;
-            }
+            string file = WpfHelper.PickImportSimfile();
             if (file == null) {
                 return;
             }
@@ -351,7 +344,7 @@ namespace Edda {
                 PauseSong();
             }
 
-            string newMapFolder = Helper.ChooseNewMapFolder();
+            string newMapFolder = WpfHelper.ChooseNewMapFolder();
             if (newMapFolder == null) {
                 return;
             }
@@ -368,7 +361,7 @@ namespace Edda {
                 PauseSong();
             }
 
-            string importMapFolder = Helper.ChooseNewMapFolder();
+            string importMapFolder = WpfHelper.ChooseNewMapFolder();
             if (importMapFolder == null) {
                 return;
             }
@@ -389,7 +382,7 @@ namespace Edda {
                 PauseSong();
             }
 
-            string openMapFolder = Helper.ChooseOpenMapFolder();
+            string openMapFolder = WpfHelper.ChooseOpenMapFolder();
             if (openMapFolder == null) {
                 return;
             }
@@ -470,7 +463,7 @@ namespace Edda {
 
             // delete oldest backup if we have too many
             if (existingBackups.Count == Program.MaxBackups) {
-                Helper.DeleteDirectory(existingBackups[0]);
+                WpfHelper.DeleteDirectory(existingBackups[0]);
             }
 
             // make new backup file
@@ -484,14 +477,8 @@ namespace Edda {
 
         }
         private void ExportMap() {
-            var d = new CommonOpenFileDialog();
-            d.Title = "Select a folder to export the map to";
-            d.IsFolderPicker = true;
-            d.InitialDirectory = Helper.GetRagnarockMapFolder();
-            if (d.ShowDialog() != CommonFileDialogResult.Ok) {
-                return;
-            }
-            if (d.FileName == null) {
+            var exportFolder = WpfHelper.PickExportFolder(Helper.GetRagnarockMapFolder());
+            if (exportFolder == null) {
                 return;
             }
 
@@ -503,7 +490,7 @@ namespace Edda {
             string zipName = Helper.ValidMapFolderNameFrom(songArtist + songName);
             // make the temp dir for zip
             string zipFolder = Path.Combine(baseFolder, zipName + "_tempDir");
-            string zipPath = Path.Combine(d.FileName, zipName + ".zip");
+            string zipPath = Path.Combine(exportFolder, zipName + ".zip");
 
             try {
                 Helper.FileDeleteIfExists(zipPath);
@@ -531,7 +518,7 @@ namespace Edda {
                 // --
 
                 if (Directory.Exists(zipFolder)) {
-                    Helper.DeleteDirectory(zipFolder);
+                    WpfHelper.DeleteDirectory(zipFolder);
                 }
                 Directory.CreateDirectory(zipFolder);
 
@@ -546,7 +533,7 @@ namespace Edda {
                 MessageBox.Show(this, $"An error occured while creating the zip file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             } finally {
                 if (Directory.Exists(zipFolder)) {
-                    Helper.DeleteDirectory(zipFolder);
+                    WpfHelper.DeleteDirectory(zipFolder);
                 }
             }
         }
@@ -932,23 +919,16 @@ namespace Edda {
 
         // song cover image
         private void SelectNewCoverImage() {
-            var d = new Microsoft.Win32.OpenFileDialog() { Filter = "JPEG Files|*.jpg;*.jpeg;*.jfif" };
-            d.Title = "Select a song to map";
-
-            if (d.ShowDialog() != true) {
-                return;
-            }
-
-            string sourceFile = d.FileName;
+            string sourceFile = WpfHelper.PickCoverFile();
             if (sourceFile == null) {
                 return;
             }
 
-            if (!Helper.IsValidCoverFile(sourceFile)) {
+            if (!WpfHelper.IsValidCoverFile(sourceFile)) {
                 var coverTrimResult = MessageBox.Show(this, $"Ragnarock will only display square cover images. Do you want Edda to create and use a cropped version of the selected image instead?", "Warning", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
                 switch (coverTrimResult) {
                     case MessageBoxResult.Yes:
-                        sourceFile = Helper.TrimCoverFile(sourceFile);
+                        sourceFile = WpfHelper.TrimCoverFile(sourceFile);
                         break;
                     case MessageBoxResult.No:
                         break; // Continue
@@ -999,7 +979,7 @@ namespace Edda {
                 ClearCoverImage();
             } else {
                 // Need to ignore cache, since we replace the contents of the cover.* file.
-                BitmapImage b = Helper.BitmapGenerator(new Uri(filePath), true);
+                BitmapImage b = WpfHelper.BitmapGenerator(new Uri(filePath), true);
                 imgCover.Source = b;
                 txtCoverFileName.Text = fileName;
                 borderImgCover.BorderThickness = new(2);
@@ -1106,16 +1086,7 @@ namespace Edda {
             RestartMetronome();
         }
         private string SelectSongDialog() {
-            // select audio file
-            var d = new Microsoft.Win32.OpenFileDialog();
-            d.Title = "Select a song to map";
-            d.DefaultExt = ".ogg";
-            d.Filter = "OGG Vorbis (*.ogg)|*.ogg";
-            if (d.ShowDialog() == true) {
-                return d.FileName;
-            } else {
-                return null;
-            }
+            return WpfHelper.PickSongFile();
         }
         private bool LoadSongFile(string file) {
             VorbisWaveReader vorbisStream;
@@ -1223,7 +1194,7 @@ namespace Edda {
         internal void ClearSongCache() {
             var cacheDirectoryPath = Path.Combine(mapEditor.mapFolder, Program.CachePath);
             if (Directory.Exists(cacheDirectoryPath)) {
-                Helper.DeleteDirectory(cacheDirectoryPath);
+                WpfHelper.DeleteDirectory(cacheDirectoryPath);
             }
         }
         private void InitSongPlayer() {
@@ -1265,7 +1236,7 @@ namespace Edda {
 
             songIsPlaying = true;
             // toggle button appearance
-            imgPlayerButton.Source = Helper.BitmapGenerator("pauseButton.png");
+            imgPlayerButton.Source = WpfHelper.BitmapGenerator("pauseButton.png");
 
             // set seek position for song
             try {
@@ -1334,7 +1305,7 @@ namespace Edda {
                 return;
             }
             songIsPlaying = false;
-            imgPlayerButton.Source = Helper.BitmapGenerator("playButton.png");
+            imgPlayerButton.Source = WpfHelper.BitmapGenerator("playButton.png");
 
             // stop note scaning
             noteScanner.Stop();
@@ -1550,13 +1521,13 @@ namespace Edda {
         }
 
         internal void RefreshBPMChanges() {
-            var win = Helper.GetFirstWindow<ChangeBPMWindow>();
+            var win = WpfHelper.GetFirstWindow<ChangeBPMWindow>();
             if (win != null) {
                 ((ChangeBPMWindow)win).RefreshBPMChanges();
             }
         }
         private void ShowUniqueWindow<T>(Func<T> windowMaker) where T : Window {
-            var win = Helper.GetFirstWindow<T>();
+            var win = WpfHelper.GetFirstWindow<T>();
 
             if (win == null) {
                 win = windowMaker();
@@ -1580,15 +1551,15 @@ namespace Edda {
             if (showDifficultyPrediction && mapEditor.currentMapDifficulty != null && supportedFeatures.HasFlag(IDifficultyPredictor.Features.RealTime)) {
                 var difficulty = difficultyPredictor.PredictDifficulty(mapEditor.currentMapDifficulty.notes, mapEditor.GlobalBPM, mapEditor.SongDuration);
                 if (difficulty.HasValue) {
-                    difficultyPrediction.Foreground = new SolidColorBrush(DifficultyPrediction.Colour);
+                    difficultyPrediction.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.Colour);
                     var showPreciseValue = userSettings.GetBoolForKey(UserSettingsKey.DifficultyPredictorShowPrecise) && supportedFeatures.HasFlag(IDifficultyPredictor.Features.PreciseFloat);
                     var predictionDisplay = Math.Round(difficulty.Value, showPreciseValue ? 2 : 0);
                     difficultyPrediction.Content = $"Difficulty: {predictionDisplay.ToString(showPreciseValue ? "#0.00" : null)}";
                 } else if (!supportedFeatures.HasFlag(IDifficultyPredictor.Features.AlwaysPredict)) {
-                    difficultyPrediction.Foreground = new SolidColorBrush(DifficultyPrediction.WarningColour);
+                    difficultyPrediction.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.WarningColour);
                     difficultyPrediction.Content = "Difficulty: ???";
                 } else {
-                    difficultyPrediction.Foreground = new SolidColorBrush(DifficultyPrediction.Colour);
+                    difficultyPrediction.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.Colour);
                     difficultyPrediction.Content = "Difficulty: 0";
                 }
             }
@@ -1601,12 +1572,10 @@ namespace Edda {
             notesStatsDouble.Text = stats.doubleNotes.ToString();
             var triplePlusNotes = stats.tripleNotes + stats.quadrupleNotes;
             notesStatsTriplePlus.Text = triplePlusNotes.ToString();
-            var triplePlusFontWeight = triplePlusNotes > 0 ? Editor.Stats.WarningFontWeight : Editor.Stats.FontWeight;
+            var triplePlusFontWeight = triplePlusNotes > 0 ? FontWeights.Bold : FontWeights.Regular;
             notesStatsTriplePlusLabel.FontWeight = triplePlusFontWeight;
             notesStatsTriplePlus.FontWeight = triplePlusFontWeight;
-            var triplePlusColor = new SolidColorBrush(
-                triplePlusNotes > 0 ? Editor.Stats.WarningColour : Editor.Stats.Colour
-            );
+            var triplePlusColor = WpfHelper.BrushFromDrawingColor(triplePlusNotes > 0 ? Editor.Stats.WarningColour : Editor.Stats.Colour);
             notesStatsTriplePlusLabel.Foreground = triplePlusColor;
             notesStatsTriplePlus.Foreground = triplePlusColor;
         }

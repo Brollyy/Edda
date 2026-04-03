@@ -387,7 +387,7 @@ namespace Edda {
             LoadSongFile(file);
         }
         private void BtnMakePreview_Click(object sender, RoutedEventArgs e) {
-            var win = Helper.GetFirstWindow<SongPreviewWindow>();
+            var win = WpfHelper.GetFirstWindow<SongPreviewWindow>();
             if (win == null) {
                 int selectedTime = (int)(sliderSongProgress.Value / 1000.0);
                 var songFile = (string)mapEditor.GetMapValue("_songFilename");
@@ -523,7 +523,7 @@ namespace Edda {
             }
         }
         private void BtnChangeBPM_Click(object sender, RoutedEventArgs e) {
-            var win = Helper.GetFirstWindow<ChangeBPMWindow>();
+            var win = WpfHelper.GetFirstWindow<ChangeBPMWindow>();
             if (win == null) {
                 win = new ChangeBPMWindow(this, gridController.currentMapDifficultyBpmChanges?.ToList());
                 win.Topmost = true;
@@ -535,7 +535,7 @@ namespace Edda {
         }
 
         private void BtnCustomizeNavBar_Click(object sender, RoutedEventArgs e) {
-            var win = Helper.GetFirstWindow<CustomizeNavBarWindow>();
+            var win = WpfHelper.GetFirstWindow<CustomizeNavBarWindow>();
             if (win == null) {
                 win = new CustomizeNavBarWindow(this, userSettings);
                 win.Topmost = true;

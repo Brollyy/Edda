@@ -69,7 +69,7 @@ namespace Edda {
             sp1.Orientation = Orientation.Horizontal;
 
             Image img = new();
-            img.Source = Helper.BitmapGenerator("blankMap.png");
+            img.Source = WpfHelper.BitmapGenerator("blankMap.png");
 
             StackPanel sp2 = new();
             sp2.Margin = new(7, 0, 0, 0);
@@ -132,7 +132,7 @@ namespace Edda {
         }
 
         private void ButtonNewMap_Click(object sender, RoutedEventArgs e) {
-            string newMapFolder = Helper.ChooseNewMapFolder();
+            string newMapFolder = WpfHelper.ChooseNewMapFolder();
             if (newMapFolder != null) {
                 MainWindow main = new();
                 Application.Current.MainWindow = main;
@@ -144,7 +144,7 @@ namespace Edda {
         }
 
         private void ButtonImportMap_Click(object sender, RoutedEventArgs e) {
-            string importMapFolder = Helper.ChooseNewMapFolder();
+            string importMapFolder = WpfHelper.ChooseNewMapFolder();
             if (importMapFolder == null) {
                 return;
             }
@@ -161,7 +161,7 @@ namespace Edda {
         }
 
         private void ButtonOpenMap_Click(object sender, RoutedEventArgs e) {
-            string mapFolder = Helper.ChooseOpenMapFolder();
+            string mapFolder = WpfHelper.ChooseOpenMapFolder();
             OpenMap(mapFolder);
         }
 

@@ -53,16 +53,16 @@ namespace Edda.Windows {
                 }
                 diffBtn.IsEnabled = true;
                 if (diffPrediction.HasValue) {
-                    diffLabel.Foreground = new SolidColorBrush(DifficultyPrediction.Colour);
+                    diffLabel.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.Colour);
                     var showPreciseValue = CheckShowPreciseValues.IsChecked == true && supportedFeatures.HasFlag(Classes.MapEditorNS.Stats.IDifficultyPredictor.Features.PreciseFloat);
                     var predictionDisplay = Math.Round(diffPrediction.Value, showPreciseValue ? 2 : 0);
                     diffLabel.Content = $"{predictionDisplay.ToString(showPreciseValue ? "#0.00" : null)}";
                 } else if (!supportedFeatures.HasFlag(Classes.MapEditorNS.Stats.IDifficultyPredictor.Features.AlwaysPredict)) {
-                    diffLabel.Foreground = new SolidColorBrush(DifficultyPrediction.WarningColour);
+                    diffLabel.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.WarningColour);
                     PanelPredictionWarning.Visibility = Visibility.Visible;
                     diffLabel.Content = "???";
                 } else {
-                    diffLabel.Foreground = new SolidColorBrush(DifficultyPrediction.Colour);
+                    diffLabel.Foreground = WpfHelper.BrushFromDrawingColor(DifficultyPrediction.Colour);
                     diffLabel.Content = "0";
                 }
             }

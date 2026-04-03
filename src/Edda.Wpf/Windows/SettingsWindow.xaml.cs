@@ -359,19 +359,8 @@ namespace Edda {
         }
 
         private string PickGameFolder() {
-            string gameInstall = null;
-            var d = new CommonOpenFileDialog();
-            d.Title = "Select the folder that Ragnarock is installed in";
-            d.IsFolderPicker = true;
             var prevGamePath = userSettings.GetValueForKey(UserSettingsKey.MapSaveLocationPath);
-            if (Directory.Exists(prevGamePath)) {
-                d.InitialDirectory = prevGamePath;
-            }
-            if (d.ShowDialog() != CommonFileDialogResult.Ok) {
-                return null;
-            }
-
-            gameInstall = d.FileName;
+            string gameInstall = WpfHelper.PickGameInstallFolder(Directory.Exists(prevGamePath) ? prevGamePath : null);
             if (gameInstall == null) {
                 return null;
             }

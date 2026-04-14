@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Windows.Automation;
 using Xunit;
 
 namespace Edda.Avalonia.UI.Tests;
@@ -31,6 +33,87 @@ public class StartWindowTests {
             Assert.True(driver.IsEnabled(StartupOpenMapButtonId));
             Assert.True(driver.IsEnabled(StartupNewMapButtonId));
             Assert.True(driver.IsEnabled(StartupImportMapButtonId));
+        } finally {
+            driver.Shutdown();
+        }
+    }
+
+    [Fact]
+    public void StartWindowFreshProfileShowsExpectedTextAndNoPlaceholderRecentMaps() {
+        var driver = new AvaloniaUIDriver();
+        try {
+            driver.Launch();
+            driver.WaitForIdle();
+
+            var versionText = driver.GetText(StartupVersionTextId);
+            Assert.True(versionText.StartsWith("version ", StringComparison.OrdinalIgnoreCase), $"Expected version text to start with 'version ', but got '{versionText}'.");
+            Assert.DoesNotContain("X.X.X", versionText);
+            Assert.Equal(0, driver.GetListItemCount(StartupRecentMapsListId));
+
+            Assert.True(driver.ContainsText("Edda"));
+            Assert.True(driver.ContainsText("New Map"));
+            Assert.True(driver.ContainsText("Create a new map"));
+            Assert.True(driver.ContainsText("Import Map"));
+            Assert.True(driver.ContainsText("Import StepMania simfiles"));
+            Assert.True(driver.ContainsText("Open Map"));
+            Assert.True(driver.ContainsText("Continue working on an existing map"));
+            Assert.True(driver.ContainsText("Recent Maps"));
+            Assert.False(driver.ContainsText("C:/SongPath/SongPath"));
+        } finally {
+            driver.Shutdown();
+        }
+    }
+
+    [Fact]
+    public void StartWindowPrimaryActionsAndRecentMapsAreArrangedForLaunchFlow() {
+        var driver = new AvaloniaUIDriver();
+        try {
+            driver.Launch();
+            driver.WaitForIdle();
+
+            var startWindow = driver.GetElementBounds(StartWindowId);
+            var exitButton = driver.GetElementBounds(StartupExitButtonId);
+            var versionText = driver.GetElementBounds(StartupVersionTextId);
+            var newMapButton = driver.GetElementBounds(StartupNewMapButtonId);
+            var importMapButton = driver.GetElementBounds(StartupImportMapButtonId);
+            var openMapButton = driver.GetElementBounds(StartupOpenMapButtonId);
+            var recentMapsList = driver.GetElementBounds(StartupRecentMapsListId);
+
+            Assert.True(CenterX(versionText) < newMapButton.left, $"Expected version text to sit in the left column, but version center {CenterX(versionText):0.##} was not left of the New Map button {newMapButton.left:0.##}.");
+            Assert.True(Math.Abs(CenterY(newMapButton) - CenterY(importMapButton)) < 25, $"Expected New Map and Import Map buttons to share a row, but centers were {CenterY(newMapButton):0.##} and {CenterY(importMapButton):0.##}.");
+            Assert.True(RightEdge(newMapButton) <= importMapButton.left + 15, $"Expected New Map and Import Map buttons to sit side-by-side without overlap, but New Map right edge {RightEdge(newMapButton):0.##} exceeded Import Map left edge {importMapButton.left:0.##}.");
+            Assert.True(openMapButton.top >= Math.Max(BottomEdge(newMapButton), BottomEdge(importMapButton)) - 10, $"Expected Open Map button to sit below the top action row, but its top edge was {openMapButton.top:0.##}.");
+            Assert.True(openMapButton.width > newMapButton.width * 1.5, $"Expected Open Map button to be the full-width primary action, but widths were Open={openMapButton.width:0.##}, New={newMapButton.width:0.##}.");
+            Assert.True(openMapButton.width > importMapButton.width * 1.5, $"Expected Open Map button to be wider than Import Map, but widths were Open={openMapButton.width:0.##}, Import={importMapButton.width:0.##}.");
+            Assert.True(recentMapsList.top >= BottomEdge(openMapButton) - 10, $"Expected Recent Maps list to sit below Open Map, but list top {recentMapsList.top:0.##} and Open Map bottom {BottomEdge(openMapButton):0.##} did not line up.");
+            Assert.True(exitButton.top <= startWindow.top + 40, $"Expected Exit button near the top edge, but top was {exitButton.top:0.##} for window top {startWindow.top:0.##}.");
+            Assert.True(RightEdge(exitButton) >= RightEdge(startWindow) - 40, $"Expected Exit button near the right edge, but right edge was {RightEdge(exitButton):0.##} for window right edge {RightEdge(startWindow):0.##}.");
+        } finally {
+            driver.Shutdown();
+        }
+    }
+
+    [Fact]
+    public void StartWindowShowsBrandLogoAndActionIcons() {
+        var driver = new AvaloniaUIDriver();
+        try {
+            driver.Launch();
+            driver.WaitForIdle();
+
+            var versionText = driver.GetElementBounds(StartupVersionTextId);
+            var newMapButton = driver.GetElementBounds(StartupNewMapButtonId);
+            var importMapButton = driver.GetElementBounds(StartupImportMapButtonId);
+            var openMapButton = driver.GetElementBounds(StartupOpenMapButtonId);
+            var images = driver.GetVisibleDescendantBoundsWithin(StartWindowId, ControlType.Image);
+            var largestImage = images.OrderByDescending(bounds => bounds.width * bounds.height).FirstOrDefault();
+
+            Assert.True(images.Count >= 4, $"Expected StartWindow branding and actions to expose at least four visible images, but found {images.Count}.");
+            Assert.True(largestImage.width >= 80 && largestImage.height >= 80, $"Expected largest StartWindow image to be logo-sized, but it was {largestImage.width:0.##}x{largestImage.height:0.##}.");
+            Assert.True(BottomEdge(largestImage) <= versionText.top + 10, $"Expected brand logo to sit above version text, but logo bottom was {BottomEdge(largestImage):0.##} and version top was {versionText.top:0.##}.");
+            Assert.True(RightEdge(largestImage) < newMapButton.left, $"Expected brand logo to stay in left column, but logo right edge was {RightEdge(largestImage):0.##} and New Map left edge was {newMapButton.left:0.##}.");
+            Assert.True(images.Any(image => CenterX(image) >= newMapButton.left && CenterX(image) <= RightEdge(newMapButton)), "Expected New Map button to include a visible icon.");
+            Assert.True(images.Any(image => CenterX(image) >= importMapButton.left && CenterX(image) <= RightEdge(importMapButton)), "Expected Import Map button to include a visible icon.");
+            Assert.True(images.Any(image => CenterX(image) >= openMapButton.left && CenterX(image) <= RightEdge(openMapButton)), "Expected Open Map button to include a visible icon.");
         } finally {
             driver.Shutdown();
         }
@@ -253,5 +336,21 @@ public class StartWindowTests {
             driver.Shutdown();
             AvaloniaWindowTestHarness.SafeDeleteDirectory(mapFolder);
         }
+    }
+
+    static double CenterX((double left, double top, double width, double height) bounds) {
+        return bounds.left + bounds.width / 2;
+    }
+
+    static double CenterY((double left, double top, double width, double height) bounds) {
+        return bounds.top + bounds.height / 2;
+    }
+
+    static double RightEdge((double left, double top, double width, double height) bounds) {
+        return bounds.left + bounds.width;
+    }
+
+    static double BottomEdge((double left, double top, double width, double height) bounds) {
+        return bounds.top + bounds.height;
     }
 }

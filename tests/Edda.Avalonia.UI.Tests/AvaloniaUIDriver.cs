@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -18,9 +19,12 @@ public sealed class AvaloniaUIDriver {
     const string MainWindowId = "AppMainWindow";
     const string SettingsWindowId = "SettingsWindow";
     const string MainWindowFallbackTitle = "Edda";
+    const string SerialExecutionMutexName = @"Global\Edda.UiTests.SerialExecution";
     const string PickerCancelSentinel = "__EDDA_TEST_PICKER_CANCEL__";
+    const uint WmClose = 0x0010;
     const string PickerQueueFileEnvironmentVariable = "EDDA_TEST_PICKER_QUEUE_FILE";
     const string DebugLogFileEnvironmentVariable = "EDDA_TEST_DEBUG_LOG_FILE";
+    const string KeepProfileEnvironmentVariable = "EDDA_TEST_KEEP_PROFILE";
     static readonly string[] MainWindowSentinelIds = {
         "btnSongPlayer",
         "sliderSongTempo",
@@ -33,17 +37,26 @@ public sealed class AvaloniaUIDriver {
     const uint MouseEventFLeftUp = 0x0004;
     const uint MouseEventFRightDown = 0x0008;
     const uint MouseEventFRightUp = 0x0010;
+    const uint MouseEventFWheel = 0x0800;
+    const int InputMouse = 0;
     const byte VirtualKeyShift = 0x10;
     const byte VirtualKeyControl = 0x11;
     const byte VirtualKeyAlt = 0x12;
 
     readonly TimeSpan defaultTimeout = TimeSpan.FromSeconds(15);
     readonly Dictionary<string, string?> launchEnvironmentOverrides = new(StringComparer.OrdinalIgnoreCase);
+    string? launchWorkingDirectory;
+    readonly Dictionary<string, AutomationElement> elementCache = new(StringComparer.Ordinal);
 
     Process? appProcess;
+    Mutex? serialExecutionMutex;
+    bool ownsSerialExecutionMutex;
     string? appLaunchRoot;
     string? exceptionLogFilePath;
     string? debugLogFilePath;
+    string? driverLogFilePath;
+    string? standardOutputLogFilePath;
+    string? standardErrorLogFilePath;
     string? pickerSelectionQueueFilePath;
     string? testProfileRoot;
     int? lastKnownMainWindowHandle;
@@ -61,26 +74,40 @@ public sealed class AvaloniaUIDriver {
         }
     }
 
+    public void SetLaunchWorkingDirectory(string? path) {
+        launchWorkingDirectory = string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
     public void Launch() {
         if (appProcess is { HasExited: false }) {
             return;
         }
 
+        AcquireSerialExecutionLock();
         var appPath = ResolveAppExecutablePath();
+        CleanupStaleProcesses(Path.GetFileNameWithoutExtension(appPath));
         testProfileRoot = Path.Combine(Path.GetTempPath(), "Edda-AvaloniaUiTests", Guid.NewGuid().ToString("N"));
         var appDataRoot = Path.Combine(testProfileRoot, "AppData", "Roaming");
         var localAppDataRoot = Path.Combine(testProfileRoot, "AppData", "Local");
         appLaunchRoot = Path.Combine(testProfileRoot, "AppUnderTest");
         exceptionLogFilePath = Path.Combine(testProfileRoot, "exception.log");
         debugLogFilePath = Path.Combine(testProfileRoot, "debug.log");
+        driverLogFilePath = Path.Combine(testProfileRoot, "driver.log");
+        standardOutputLogFilePath = Path.Combine(testProfileRoot, "stdout.log");
+        standardErrorLogFilePath = Path.Combine(testProfileRoot, "stderr.log");
         pickerSelectionQueueFilePath = Path.Combine(testProfileRoot, "picker-queue.txt");
         Directory.CreateDirectory(appDataRoot);
         Directory.CreateDirectory(localAppDataRoot);
         File.WriteAllText(pickerSelectionQueueFilePath, string.Empty);
+        File.WriteAllText(driverLogFilePath, string.Empty);
+        File.WriteAllText(standardOutputLogFilePath, string.Empty);
+        File.WriteAllText(standardErrorLogFilePath, string.Empty);
         var isolatedAppPath = CopyAppToIsolatedRoot(appPath, appLaunchRoot);
 
         var startInfo = new ProcessStartInfo {
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         if (isolatedAppPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
@@ -90,7 +117,7 @@ public sealed class AvaloniaUIDriver {
             startInfo.FileName = isolatedAppPath;
         }
 
-        startInfo.WorkingDirectory = Path.GetDirectoryName(isolatedAppPath) ?? Directory.GetCurrentDirectory();
+        startInfo.WorkingDirectory = launchWorkingDirectory ?? Path.GetDirectoryName(isolatedAppPath) ?? Directory.GetCurrentDirectory();
         startInfo.Environment["APPDATA"] = appDataRoot;
         startInfo.Environment["LOCALAPPDATA"] = localAppDataRoot;
         startInfo.Environment["EDDA_TEST_EXCEPTION_LOG_FILE"] = exceptionLogFilePath;
@@ -100,28 +127,37 @@ public sealed class AvaloniaUIDriver {
             startInfo.Environment[key] = value ?? string.Empty;
         }
 
-        appProcess = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch {appPath}.");
         try {
-            appProcess.WaitForInputIdle((int)TimeSpan.FromSeconds(10).TotalMilliseconds);
-        } catch {
-            // Some environments/process startup paths do not expose input-idle state.
-        }
+            appProcess = Process.Start(startInfo) ?? throw new InvalidOperationException($"Failed to launch {appPath}.");
+            appProcess.OutputDataReceived += (_, eventArgs) => AppendProcessLogLine(standardOutputLogFilePath, eventArgs.Data);
+            appProcess.ErrorDataReceived += (_, eventArgs) => AppendProcessLogLine(standardErrorLogFilePath, eventArgs.Data);
+            appProcess.BeginOutputReadLine();
+            appProcess.BeginErrorReadLine();
+            elementCache.Clear();
+            try {
+                appProcess.WaitForInputIdle((int)TimeSpan.FromSeconds(10).TotalMilliseconds);
+            } catch {
+                // Some environments/process startup paths do not expose input-idle state.
+            }
 
-        WaitForIdle();
-        WaitForStartWindow();
+            WaitForIdle();
+            WaitForStartWindow();
+        } catch {
+            ReleaseSerialExecutionLock();
+            throw;
+        }
     }
 
     public void Shutdown() {
         if (appProcess is { HasExited: false }) {
             try {
-                var window = FindSettingsWindow() ?? FindMainWindow() ?? FindStartWindow();
-                if (window != null) {
-                    FocusWindow(window);
-                    SendKeyboardShortcutCore("Alt+F4");
-                    if (appProcess.WaitForExit((int)TimeSpan.FromSeconds(3).TotalMilliseconds)) {
-                        appProcess.Dispose();
-                        appProcess = null;
-                    }
+                foreach (var hwnd in GetProcessWindowHandles()) {
+                    PostMessage(hwnd, WmClose, IntPtr.Zero, IntPtr.Zero);
+                }
+
+                if (appProcess.WaitForExit((int)TimeSpan.FromSeconds(3).TotalMilliseconds)) {
+                    appProcess.Dispose();
+                    appProcess = null;
                 }
             } catch {
                 // Fall back to forceful cleanup below.
@@ -138,12 +174,18 @@ public sealed class AvaloniaUIDriver {
         appLaunchRoot = null;
         exceptionLogFilePath = null;
         debugLogFilePath = null;
+        driverLogFilePath = null;
+        standardOutputLogFilePath = null;
+        standardErrorLogFilePath = null;
         launchEnvironmentOverrides.Clear();
+        launchWorkingDirectory = null;
         pickerSelectionQueueFilePath = null;
         lastKnownMainWindowHandle = null;
         pendingMainWindowReplacementSourceHandle = null;
+        elementCache.Clear();
 
-        if (!string.IsNullOrWhiteSpace(testProfileRoot) && Directory.Exists(testProfileRoot)) {
+        var keepProfile = string.Equals(Environment.GetEnvironmentVariable(KeepProfileEnvironmentVariable), "1", StringComparison.Ordinal);
+        if (!keepProfile && !string.IsNullOrWhiteSpace(testProfileRoot) && Directory.Exists(testProfileRoot)) {
             try {
                 Directory.Delete(testProfileRoot, recursive: true);
             } catch {
@@ -152,33 +194,96 @@ public sealed class AvaloniaUIDriver {
         }
 
         testProfileRoot = null;
+        ReleaseSerialExecutionLock();
+    }
+
+    IntPtr[] GetProcessWindowHandles() {
+        var handles = new List<IntPtr>();
+        if (appProcess == null) {
+            return handles.ToArray();
+        }
+
+        try {
+            if (appProcess.MainWindowHandle != IntPtr.Zero) {
+                handles.Add(appProcess.MainWindowHandle);
+            }
+        } catch {
+            // Fall back to automation-discovered windows below.
+        }
+
+        try {
+            foreach (var window in GetProcessWindows()) {
+                try {
+                    var hwnd = new IntPtr(window.Current.NativeWindowHandle);
+                    if (hwnd != IntPtr.Zero && !handles.Contains(hwnd)) {
+                        handles.Add(hwnd);
+                    }
+                } catch {
+                    // Ignore windows that disappear while the app is closing.
+                }
+            }
+        } catch {
+            // Best effort enumeration only.
+        }
+
+        return handles.ToArray();
+    }
+
+    void AcquireSerialExecutionLock() {
+        if (ownsSerialExecutionMutex) {
+            return;
+        }
+
+        serialExecutionMutex ??= new Mutex(false, SerialExecutionMutexName);
+        try {
+            if (!serialExecutionMutex.WaitOne(TimeSpan.FromMinutes(5))) {
+                throw new TimeoutException("Timed out waiting for exclusive UI test execution lock.");
+            }
+        } catch (AbandonedMutexException) {
+            // Treat abandoned ownership as acquired so the next test can proceed.
+        }
+
+        ownsSerialExecutionMutex = true;
+    }
+
+    void ReleaseSerialExecutionLock() {
+        if (!ownsSerialExecutionMutex) {
+            serialExecutionMutex?.Dispose();
+            serialExecutionMutex = null;
+            return;
+        }
+
+        try {
+            serialExecutionMutex?.ReleaseMutex();
+        } catch (ApplicationException) {
+            // Best effort cleanup if the mutex is no longer owned.
+        } finally {
+            ownsSerialExecutionMutex = false;
+            serialExecutionMutex?.Dispose();
+            serialExecutionMutex = null;
+        }
     }
 
     public void WaitForIdle(TimeSpan? timeout = null) {
         EnsureLaunched();
 
-        var remaining = timeout ?? TimeSpan.FromSeconds(2);
-        var deadline = DateTime.UtcNow + remaining;
-        while (DateTime.UtcNow < deadline) {
+        var start = DateTime.UtcNow;
+        var settleDelay = timeout ?? TimeSpan.FromMilliseconds(220);
+        while (DateTime.UtcNow - start < settleDelay) {
             if (appProcess is { HasExited: true }) {
                 throw new InvalidOperationException(WithDiagnostics("Avalonia process exited unexpectedly."));
             }
 
-            try {
-                var waitMs = Math.Max(1, (int)Math.Min(remaining.TotalMilliseconds, 250));
-                if (appProcess?.WaitForInputIdle(waitMs) == true) {
-                    Thread.Sleep(80);
-                    return;
-                }
-            } catch {
-                // Some environments/process states do not expose input-idle reliably.
-            }
-
-            Thread.Sleep(40);
-            remaining = deadline - DateTime.UtcNow;
+            var remaining = settleDelay - (DateTime.UtcNow - start);
+            var sleepMilliseconds = (int)Math.Max(10, Math.Min(40, remaining.TotalMilliseconds));
+            Thread.Sleep(sleepMilliseconds);
         }
 
-        Thread.Sleep(80);
+        if (appProcess is { HasExited: true }) {
+            throw new InvalidOperationException(WithDiagnostics("Avalonia process exited unexpectedly."));
+        }
+
+        WriteDriverLog($"WaitForIdle completed in {(DateTime.UtcNow - start).TotalMilliseconds:0}ms");
     }
 
     public void ClickButton(string id) {
@@ -188,14 +293,82 @@ public sealed class AvaloniaUIDriver {
 
     public void ClickWithinElement(string id, double xRatio, double yRatio) {
         var element = GetElement(id);
-        FocusElementWindow(element);
-        var point = ResolvePointInElement(element, xRatio, yRatio);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+        var point = ResolvePointInElement(interactionElement, xRatio, yRatio);
+        WriteDriverLog($"ClickWithinElement id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' rawBounds={DescribeBounds(interactionElement.Current.BoundingRectangle)} visibleBounds={DescribeBounds(ResolveVisibleBounds(interactionElement))} point=({point.x},{point.y}) hit={DescribeElementAtScreenPoint(point.x, point.y)}");
 
+        SetCursorPos(point.x + 8, point.y + 8);
+        Thread.Sleep(20);
         SetCursorPos(point.x, point.y);
         Thread.Sleep(20);
-        mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftDown);
         Thread.Sleep(20);
-        mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftUp);
+        Thread.Sleep(20);
+        SetCursorPos(point.x + 1, point.y);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+    }
+
+    public void RightClickWithinElement(string id, double xRatio, double yRatio) {
+        var element = GetElement(id);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+        var point = ResolvePointInElement(interactionElement, xRatio, yRatio);
+        WriteDriverLog($"RightClickWithinElement id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' rawBounds={DescribeBounds(interactionElement.Current.BoundingRectangle)} visibleBounds={DescribeBounds(ResolveVisibleBounds(interactionElement))} point=({point.x},{point.y}) hit={DescribeElementAtScreenPoint(point.x, point.y)}");
+
+        SetCursorPos(point.x + 8, point.y + 8);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+        Thread.Sleep(20);
+        SendMouseButton(MouseEventFRightDown);
+        Thread.Sleep(20);
+        SendMouseButton(MouseEventFRightUp);
+        Thread.Sleep(20);
+        SetCursorPos(point.x + 1, point.y);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+    }
+
+    public void MoveMouseWithinElement(string id, double xRatio, double yRatio) {
+        var element = GetElement(id);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+        var point = ResolvePointInElement(interactionElement, xRatio, yRatio);
+        WriteDriverLog($"MoveMouseWithinElement id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' rawBounds={DescribeBounds(interactionElement.Current.BoundingRectangle)} visibleBounds={DescribeBounds(ResolveVisibleBounds(interactionElement))} point=({point.x},{point.y}) hit={DescribeElementAtScreenPoint(point.x, point.y)}");
+        SetCursorPos(point.x + 8, point.y + 8);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+        Thread.Sleep(40);
+    }
+
+    public void MouseWheelWithinElement(string id, double xRatio, double yRatio, int delta, bool holdControl = false) {
+        var element = GetElement(id);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+        var point = ResolvePointInElement(interactionElement, xRatio, yRatio);
+        WriteDriverLog($"MouseWheelWithinElement id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' rawBounds={DescribeBounds(interactionElement.Current.BoundingRectangle)} visibleBounds={DescribeBounds(ResolveVisibleBounds(interactionElement))} point=({point.x},{point.y}) delta={delta} ctrl={holdControl} hit={DescribeElementAtScreenPoint(point.x, point.y)}");
+        SetCursorPos(point.x + 8, point.y + 8);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+        Thread.Sleep(25);
+
+        if (holdControl) {
+            keybd_event(VirtualKeyControl, 0, 0, UIntPtr.Zero);
+        }
+
+        SendMouseWheel(delta);
+        Thread.Sleep(25);
+
+        if (holdControl) {
+            keybd_event(VirtualKeyControl, 0, KeyEventFKeyUp, UIntPtr.Zero);
+        }
+
         WaitForIdle();
     }
 
@@ -220,8 +393,13 @@ public sealed class AvaloniaUIDriver {
     }
 
     public bool IsEnabled(string id) {
+        var startedAt = DateTime.UtcNow;
         var element = GetElementOrNull(id);
-        return element != null && element.Current.IsEnabled;
+        var isEnabled = element != null && IsElementEnabled(element);
+        if (id is "sliderSongTempo" or "sliderSongProgress" or "btnChangeDifficulty0" or "btnPlayPreview") {
+            WriteDriverLog($"IsEnabled id='{id}' result={isEnabled} elapsedMs={(DateTime.UtcNow - startedAt).TotalMilliseconds:0}");
+        }
+        return isEnabled;
     }
 
     public void SelectMenuItem(string path) {
@@ -236,6 +414,18 @@ public sealed class AvaloniaUIDriver {
 
         var currentScope = FindMainWindow() ?? throw new InvalidOperationException("Main window is not available for menu interaction.");
         FocusWindow(currentScope);
+        DismissOpenMenus();
+
+        var directAutomationId = ResolveMenuPathAutomationId(path);
+        var directMenuItem = string.IsNullOrWhiteSpace(directAutomationId)
+            ? null
+            : FindElementByAutomationId(directAutomationId);
+        if (directMenuItem != null) {
+            ClickElement(directMenuItem);
+            WaitForIdle();
+            DismissOpenMenus();
+            return;
+        }
 
         for (var i = 0; i < segments.Length; i++) {
             var segment = segments[i];
@@ -247,10 +437,12 @@ public sealed class AvaloniaUIDriver {
 
             if (isLast) {
                 ClickElement(menuItem);
-            } else if (menuItem.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj)) {
-                ((ExpandCollapsePattern)expandObj).Expand();
             } else {
                 ClickElement(menuItem);
+                if (menuItem.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj) &&
+                    ((ExpandCollapsePattern)expandObj).Current.ExpandCollapseState == ExpandCollapseState.Collapsed) {
+                    ((ExpandCollapsePattern)expandObj).Expand();
+                }
             }
 
             currentScope = menuItem;
@@ -258,6 +450,7 @@ public sealed class AvaloniaUIDriver {
         }
 
         WaitForIdle();
+        DismissOpenMenus();
     }
 
     public bool IsMenuItemVisible(string path) {
@@ -336,12 +529,6 @@ public sealed class AvaloniaUIDriver {
             return;
         }
 
-        SendKeyboardShortcutCore("Space");
-        WaitForIdle();
-        if (WaitUntil(() => IsChecked(id) == isChecked, TimeSpan.FromSeconds(1))) {
-            return;
-        }
-
         ClickElement(element);
         WaitForIdle();
         if (WaitUntil(() => IsChecked(id) == isChecked, TimeSpan.FromSeconds(1))) {
@@ -351,8 +538,13 @@ public sealed class AvaloniaUIDriver {
         if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var toggleObj)) {
             ((TogglePattern)toggleObj).Toggle();
             WaitForIdle();
+            if (WaitUntil(() => IsChecked(id) == isChecked, TimeSpan.FromSeconds(1))) {
+                return;
+            }
         }
 
+        SendKeyboardShortcutCore("Space");
+        WaitForIdle();
         if (!WaitUntil(() => IsChecked(id) == isChecked, TimeSpan.FromSeconds(1))) {
             throw new InvalidOperationException($"Checkbox '{id}' did not reach the requested state '{isChecked}'.");
         }
@@ -373,6 +565,10 @@ public sealed class AvaloniaUIDriver {
 
     public void SetText(string id, string value) {
         var element = GetElement(id);
+        SetText(element, value);
+    }
+
+    void SetText(AutomationElement element, string value) {
         FocusElementWindow(element);
         TrySetFocus(element);
 
@@ -480,7 +676,7 @@ public sealed class AvaloniaUIDriver {
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem)));
 
             foreach (AutomationElement item in items) {
-                var name = item.Current.Name ?? string.Empty;
+                var name = TryGetCurrentName(item);
                 if (!string.IsNullOrWhiteSpace(name) && !optionNames.Contains(name, StringComparer.Ordinal)) {
                     optionNames.Add(name);
                 }
@@ -512,18 +708,19 @@ public sealed class AvaloniaUIDriver {
         if (element.TryGetCurrentPattern(SelectionPattern.Pattern, out var selectionObj)) {
             var selected = ((SelectionPattern)selectionObj).Current.GetSelection();
             if (selected.Length > 0) {
-                return selected[0].Current.Name ?? string.Empty;
+                return TryGetCurrentName(selected[0]);
             }
         }
 
         var text = element.FindFirst(
             TreeScope.Descendants,
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text));
-        if (text != null && !string.IsNullOrWhiteSpace(text.Current.Name)) {
-            return text.Current.Name;
+        var textName = text != null ? TryGetCurrentName(text) : string.Empty;
+        if (!string.IsNullOrWhiteSpace(textName)) {
+            return textName;
         }
 
-        return element.Current.Name ?? string.Empty;
+        return TryGetCurrentName(element);
     }
 
     public void SendKeyboardShortcut(string shortcut) {
@@ -533,7 +730,6 @@ public sealed class AvaloniaUIDriver {
         }
         FocusAppWindow();
         SendKeyboardShortcutCore(shortcut);
-        WaitForIdle();
     }
 
     public void SendKeyboardShortcutToWindow(string shortcut, string windowTitle) {
@@ -545,7 +741,166 @@ public sealed class AvaloniaUIDriver {
 
         FocusWindow(window);
         SendKeyboardShortcutCore(shortcut);
+    }
+
+    public void SendKeyboardShortcutToElement(string id, string shortcut) {
+        var element = GetElement(id);
+        var keyboardTarget = GetKeyboardTarget(element, id) ?? element;
+        FocusElementWindow(keyboardTarget);
+        TrySetFocus(keyboardTarget);
+        SendKeyboardShortcutCore(shortcut);
+    }
+
+    public int CountWindowsByTitle(string title) {
+        EnsureLaunched();
+        if (string.IsNullOrWhiteSpace(title)) {
+            return 0;
+        }
+
+        return GetProcessWindows().Count(window =>
+            string.Equals(TryGetCurrentName(window), title, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public int GetDataGridRowCount(string dataGridId) {
+        var dataGrid = GetElement(dataGridId);
+        var rowIds = dataGrid.FindAll(TreeScope.Descendants, Condition.TrueCondition)
+            .Cast<AutomationElement>()
+            .Select(element => element.Current.AutomationId ?? string.Empty)
+            .Where(automationId =>
+                automationId.StartsWith($"{dataGridId}_Row", StringComparison.Ordinal) &&
+                automationId.EndsWith("_Select", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (rowIds.Count > 0) {
+            return rowIds.Count;
+        }
+
+        return dataGrid.FindAll(TreeScope.Descendants, Condition.TrueCondition)
+            .Cast<AutomationElement>()
+            .Select(element => element.Current.AutomationId ?? string.Empty)
+            .Where(automationId => automationId.StartsWith($"{dataGridId}_Cell", StringComparison.Ordinal))
+            .Select(automationId => {
+                var suffix = automationId[(dataGridId.Length + "_Cell".Length)..];
+                var separatorIndex = suffix.IndexOf('_');
+                return separatorIndex >= 0 ? suffix[..separatorIndex] : suffix;
+            })
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+    }
+
+    public void SelectDataGridRow(string dataGridId, int rowIndex) {
+        ClickButton($"{dataGridId}_Row{rowIndex}_Select");
+    }
+
+    public string GetDataGridCellText(string dataGridId, int rowIndex, int columnIndex) {
+        var cell = GetDataGridCellElement(dataGridId, rowIndex, columnIndex);
+        return ReadElementText(cell);
+    }
+
+    public void SetDataGridCellText(string dataGridId, int rowIndex, int columnIndex, string value) {
+        var cell = GetDataGridCellElement(dataGridId, rowIndex, columnIndex);
+        SetText(cell, value);
+        FocusElementWindow(cell);
+        TrySetFocus(cell);
+        SendKeyboardShortcutCore("Enter");
         WaitForIdle();
+    }
+
+    public bool TryAddDataGridNewItemRow(string dataGridId, params string[] cellValues) {
+        var addButton = GetElementOrNull($"{dataGridId}_Add");
+        if (addButton == null) {
+            return false;
+        }
+
+        var initialRowCount = GetDataGridRowCount(dataGridId);
+        ClickElement(addButton);
+        WaitForIdle();
+
+        var createdRowCount = GetDataGridRowCount(dataGridId);
+        if (createdRowCount <= initialRowCount) {
+            return false;
+        }
+
+        var rowIndex = createdRowCount - 1;
+        for (var columnIndex = 0; columnIndex < cellValues.Length; columnIndex++) {
+            SetDataGridCellText(dataGridId, rowIndex, columnIndex, cellValues[columnIndex]);
+        }
+
+        return true;
+    }
+
+    AutomationElement GetDataGridCellElement(string dataGridId, int rowIndex, int columnIndex) {
+        try {
+            return WaitForElement(
+                () => FindDataGridCellElement(dataGridId, rowIndex, columnIndex),
+                defaultTimeout,
+                $"DataGrid cell '{dataGridId}[{rowIndex},{columnIndex}]'");
+        } catch (TimeoutException ex) {
+            throw new TimeoutException(WithDiagnostics(ex.Message, includeDebugLog: true));
+        }
+    }
+
+    AutomationElement? FindDataGridCellElement(string dataGridId, int rowIndex, int columnIndex) {
+        var exactId = $"{dataGridId}_Cell{rowIndex}_{columnIndex}";
+        var exactMatch = GetElementOrNull(exactId);
+        if (exactMatch != null) {
+            return exactMatch;
+        }
+
+        if (!string.Equals(dataGridId, "dataBPMChange", StringComparison.Ordinal)) {
+            return null;
+        }
+
+        var scope = FindWindowByTitle("Change BPM") ?? FindWindowByTitle("Timing Settings");
+        if (scope == null) {
+            return null;
+        }
+
+        try {
+            var orderedEdits = scope.FindAll(
+                    TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit))
+                .Cast<AutomationElement>()
+                .Select(element => new {
+                    Element = element,
+                    Bounds = element.Current.BoundingRectangle
+                })
+                .Where(entry => entry.Bounds.Width > 1 && entry.Bounds.Height > 1)
+                .OrderBy(entry => entry.Bounds.Top)
+                .ThenBy(entry => entry.Bounds.Left)
+                .ToList();
+
+            if (orderedEdits.Count == 0) {
+                return null;
+            }
+
+            var rows = new List<List<(AutomationElement element, System.Windows.Rect bounds)>>();
+            foreach (var entry in orderedEdits) {
+                if (rows.Count == 0 || Math.Abs(rows[^1][0].bounds.Top - entry.Bounds.Top) > 4) {
+                    rows.Add([]);
+                }
+
+                rows[^1].Add((entry.Element, entry.Bounds));
+            }
+
+            if (rowIndex < 0 || rowIndex >= rows.Count) {
+                return null;
+            }
+
+            var row = rows[rowIndex]
+                .OrderBy(entry => entry.bounds.Left)
+                .Select(entry => entry.element)
+                .ToList();
+            if (columnIndex < 0 || columnIndex >= row.Count) {
+                return null;
+            }
+
+            return row[columnIndex];
+        } catch (COMException) {
+            return null;
+        } catch (ElementNotAvailableException) {
+            return null;
+        }
     }
 
     public void ClickListItemContainingText(string listAutomationId, string text) {
@@ -678,8 +1033,17 @@ public sealed class AvaloniaUIDriver {
                 window = WaitForElement(() => FindMainWindow(), effectiveTimeout, "main window");
             }
 
-            lastKnownMainWindowHandle = window.Current.NativeWindowHandle;
+            lastKnownMainWindowHandle = TryGetNativeWindowHandle(window);
             pendingMainWindowReplacementSourceHandle = null;
+            elementCache.Clear();
+            PrimeElementCache(
+                window,
+                "btnSongPlayer",
+                "sliderSongProgress",
+                "sliderSongTempo",
+                "btnPlayPreview",
+                "btnAddDifficulty",
+                "btnChangeDifficulty0");
         } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
             throw new TimeoutException(WithDiagnostics(ex.Message, includeDebugLog: true));
         }
@@ -688,6 +1052,7 @@ public sealed class AvaloniaUIDriver {
     public void WaitForStartWindow(TimeSpan? timeout = null) {
         try {
             _ = WaitForElement(FindStartWindow, timeout ?? defaultTimeout, "start window");
+            elementCache.Clear();
         } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
             throw new TimeoutException(WithDiagnostics(ex.Message));
         }
@@ -696,6 +1061,7 @@ public sealed class AvaloniaUIDriver {
     public void WaitForSettingsWindow(TimeSpan? timeout = null) {
         try {
             _ = WaitForElement(FindSettingsWindow, timeout ?? defaultTimeout, "settings window");
+            elementCache.Clear();
         } catch (Exception ex) when (ex is TimeoutException or InvalidOperationException) {
             throw new TimeoutException(WithDiagnostics(ex.Message));
         }
@@ -719,16 +1085,107 @@ public sealed class AvaloniaUIDriver {
         return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
     }
 
-    public void DragWithinElement(string id, double startXRatio, double startYRatio, double endXRatio, double endYRatio) {
+    public IReadOnlyList<(double left, double top, double width, double height)> GetVisibleDescendantBoundsWithin(string containerId, ControlType controlType) {
+        var container = GetElement(containerId);
+        var matches = container.FindAll(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, controlType));
+
+        return matches
+            .Cast<AutomationElement>()
+            .Where(element => !element.Current.IsOffscreen && element.Current.BoundingRectangle.Width > 1 && element.Current.BoundingRectangle.Height > 1)
+            .Select(element => {
+                var bounds = element.Current.BoundingRectangle;
+                return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+            })
+            .ToList();
+    }
+
+    public Bitmap CaptureElementBitmap(string id) {
+        var element = GetElement(id);
+        return CaptureScreenRegion(ResolveVisibleBounds(element));
+    }
+
+    public string GetItemStatus(string id) {
+        var element = GetElement(id);
+        return element.Current.ItemStatus ?? string.Empty;
+    }
+
+    public (double left, double top, double width, double height) GetNamedElementBoundsWithin(string containerId, string elementName) {
+        var container = GetElement(containerId);
+        var element = WaitForElement(
+            () => FindNamedDescendant(container, elementName),
+            defaultTimeout,
+            $"Element named '{elementName}' inside '{containerId}'");
+        var bounds = ResolveVisibleBounds(element);
+        return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+    }
+
+    public string GetNamedElementItemStatusWithin(string containerId, string elementName) {
+        var container = GetElement(containerId);
+        var element = WaitForElement(
+            () => FindNamedDescendant(container, elementName),
+            defaultTimeout,
+            $"Element named '{elementName}' inside '{containerId}'");
+        return element.Current.ItemStatus ?? string.Empty;
+    }
+
+    public Bitmap CaptureNamedElementBitmapWithin(string containerId, string elementName) {
+        var container = GetElement(containerId);
+        var element = WaitForElement(
+            () => FindNamedDescendant(container, elementName),
+            defaultTimeout,
+            $"Element named '{elementName}' inside '{containerId}'");
+        return CaptureScreenRegion(ResolveVisibleBounds(element));
+    }
+
+    public void ResizeMainWindow(int width, int height) {
+        var mainWindow = FindMainWindow() ?? throw new InvalidOperationException("Main window is not available for resize.");
+        var nativeHandle = TryGetNativeWindowHandle(mainWindow);
+        if (nativeHandle == 0) {
+            throw new InvalidOperationException("Main window handle was not available for resize.");
+        }
+
+        var bounds = mainWindow.Current.BoundingRectangle;
+        if (!MoveWindow(new IntPtr(nativeHandle), (int)bounds.Left, (int)bounds.Top, width, height, true)) {
+            throw new InvalidOperationException("Could not resize the main window.");
+        }
+
+        elementCache.Clear();
+        WaitForIdle(TimeSpan.FromMilliseconds(450));
+    }
+
+    public void SetScrollViewerVerticalPercent(string id, double verticalPercent) {
         var element = GetElement(id);
         FocusElementWindow(element);
+        TrySetFocus(element);
+        if (!element.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollObj)) {
+            throw new InvalidOperationException($"Element '{id}' does not support scroll interaction.");
+        }
 
-        var start = ResolvePointInElement(element, startXRatio, startYRatio);
-        var end = ResolvePointInElement(element, endXRatio, endYRatio);
+        var scroll = (ScrollPattern)scrollObj;
+        var horizontalPercent = scroll.Current.HorizontallyScrollable
+            ? scroll.Current.HorizontalScrollPercent
+            : ScrollPattern.NoScroll;
+        scroll.SetScrollPercent(horizontalPercent, Math.Clamp(verticalPercent, 0, 100));
+        WaitForIdle(TimeSpan.FromMilliseconds(350));
+    }
 
+    public void DragWithinElement(string id, double startXRatio, double startYRatio, double endXRatio, double endYRatio) {
+        var element = GetElement(id);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+
+        var start = ResolvePointInElement(interactionElement, startXRatio, startYRatio);
+        var end = ResolvePointInElement(interactionElement, endXRatio, endYRatio);
+        WriteDriverLog($"DragWithinElement id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' rawBounds={DescribeBounds(interactionElement.Current.BoundingRectangle)} visibleBounds={DescribeBounds(ResolveVisibleBounds(interactionElement))} start=({start.x},{start.y}) startHit={DescribeElementAtScreenPoint(start.x, start.y)} end=({end.x},{end.y}) endHit={DescribeElementAtScreenPoint(end.x, end.y)}");
+
+        SetCursorPos(start.x + 8, start.y + 8);
+        Thread.Sleep(20);
         SetCursorPos(start.x, start.y);
         Thread.Sleep(20);
-        mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftDown);
         Thread.Sleep(40);
 
         const int stepCount = 12;
@@ -741,7 +1198,90 @@ public sealed class AvaloniaUIDriver {
         }
 
         Thread.Sleep(40);
-        mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftUp);
+        Thread.Sleep(20);
+        SetCursorPos(end.x + 1, end.y);
+        Thread.Sleep(20);
+        SetCursorPos(end.x, end.y);
+        WaitForIdle();
+    }
+
+    public void DragElementByOffset(string id, double startXRatio, double startYRatio, int deltaX, int deltaY) {
+        var element = GetElement(id);
+        var interactionElement = ResolvePointInteractionElement(element);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+
+        var start = ResolvePointInElement(interactionElement, startXRatio, startYRatio);
+        var end = (x: start.x + deltaX, y: start.y + deltaY);
+        WriteDriverLog($"DragElementByOffset id='{id}' interactionId='{TryGetCurrentAutomationId(interactionElement)}' start=({start.x},{start.y}) end=({end.x},{end.y})");
+
+        SetCursorPos(start.x + 8, start.y + 8);
+        Thread.Sleep(20);
+        SetCursorPos(start.x, start.y);
+        Thread.Sleep(20);
+        SendMouseButton(MouseEventFLeftDown);
+        Thread.Sleep(40);
+
+        const int stepCount = 12;
+        for (var step = 1; step <= stepCount; step++) {
+            var progress = step / (double)stepCount;
+            var x = (int)Math.Round(start.x + ((end.x - start.x) * progress));
+            var y = (int)Math.Round(start.y + ((end.y - start.y) * progress));
+            SetCursorPos(x, y);
+            Thread.Sleep(25);
+        }
+
+        Thread.Sleep(40);
+        SendMouseButton(MouseEventFLeftUp);
+        Thread.Sleep(20);
+        SetCursorPos(end.x, end.y);
+        WaitForIdle();
+    }
+
+    public void DragNamedElementWithin(string containerId, string elementName, double targetXRatio, double targetYRatio) {
+        var container = GetElement(containerId);
+        var namedElement = WaitForElement(
+            () => FindNamedDescendant(container, elementName),
+            defaultTimeout,
+            $"Element named '{elementName}' inside '{containerId}'");
+
+        var interactionContainer = ResolvePointInteractionElement(container);
+        PrepareWindowForPointInput(interactionContainer);
+        TrySetFocus(interactionContainer);
+        var sourceBounds = ResolveVisibleBounds(namedElement);
+        var containerBounds = ResolveVisibleBounds(interactionContainer);
+        var clippedSourceBounds = System.Windows.Rect.Intersect(sourceBounds, containerBounds);
+        if (clippedSourceBounds.Width > 1 && clippedSourceBounds.Height > 1) {
+            sourceBounds = clippedSourceBounds;
+        }
+        var sourceX = (int)(sourceBounds.Left + sourceBounds.Width / 2);
+        var sourceY = (int)(sourceBounds.Top + sourceBounds.Height / 2);
+        var target = ResolvePointInElement(interactionContainer, targetXRatio, targetYRatio);
+        WriteDriverLog($"DragNamedElementWithin container='{containerId}' sourceName='{elementName}' containerRawBounds={DescribeBounds(interactionContainer.Current.BoundingRectangle)} containerVisibleBounds={DescribeBounds(containerBounds)} sourceBounds={DescribeBounds(sourceBounds)} source=({sourceX},{sourceY}) sourceHit={DescribeElementAtScreenPoint(sourceX, sourceY)} target=({target.x},{target.y}) targetHit={DescribeElementAtScreenPoint(target.x, target.y)}");
+
+        SetCursorPos(sourceX + 8, sourceY + 8);
+        Thread.Sleep(20);
+        SetCursorPos(sourceX, sourceY);
+        Thread.Sleep(20);
+        SendMouseButton(MouseEventFLeftDown);
+        Thread.Sleep(40);
+
+        const int stepCount = 12;
+        for (var step = 1; step <= stepCount; step++) {
+            var progress = step / (double)stepCount;
+            var x = (int)Math.Round(sourceX + ((target.x - sourceX) * progress));
+            var y = (int)Math.Round(sourceY + ((target.y - sourceY) * progress));
+            SetCursorPos(x, y);
+            Thread.Sleep(25);
+        }
+
+        Thread.Sleep(40);
+        SendMouseButton(MouseEventFLeftUp);
+        Thread.Sleep(20);
+        SetCursorPos(target.x + 1, target.y);
+        Thread.Sleep(20);
+        SetCursorPos(target.x, target.y);
         WaitForIdle();
     }
 
@@ -752,17 +1292,67 @@ public sealed class AvaloniaUIDriver {
     AutomationElement? GetElementOrNull(string id) {
         EnsureLaunched();
 
-        return id switch {
+        if (ShouldCacheElementId(id) &&
+            elementCache.TryGetValue(id, out var cachedElement) &&
+            IsCachedElementUsable(cachedElement, id)) {
+            return cachedElement;
+        }
+
+        var directMatch = id switch {
             StartWindowId => FindStartWindow(),
             MainWindowId => FindMainWindow(),
             SettingsWindowId => FindSettingsWindow(),
             _ => FindElementByAutomationId(id)
         };
+        if (directMatch != null) {
+            if (ShouldCacheElementId(id)) {
+                elementCache[id] = directMatch;
+            }
+            return directMatch;
+        }
+
+        return FindCompositeElementContainer(id);
+    }
+
+    static AutomationElement? GetKeyboardTarget(AutomationElement element, string automationId) {
+        return FindByAutomationIdWithin(element, $"{automationId}_KeyboardTarget");
+    }
+
+    AutomationElement? FindCompositeElementContainer(string automationId) {
+        if (string.Equals(automationId, "dataBPMChange", StringComparison.Ordinal)) {
+            var changeBpmWindow = FindWindowByTitle("Change BPM") ?? FindWindowByTitle("Timing Settings");
+            if (changeBpmWindow != null) {
+                return changeBpmWindow;
+            }
+        }
+
+        foreach (var window in GetProcessWindowsInSearchOrder()) {
+            if (FindByAutomationIdWithin(window, $"{automationId}_KeyboardTarget") != null) {
+                return window;
+            }
+
+            try {
+                var descendants = window.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                foreach (AutomationElement descendant in descendants) {
+                    var id = TryGetCurrentAutomationId(descendant);
+                    if (id.StartsWith($"{automationId}_Row", StringComparison.Ordinal) ||
+                        id.StartsWith($"{automationId}_Cell", StringComparison.Ordinal)) {
+                        return window;
+                    }
+                }
+            } catch (COMException) {
+                // The window disappeared while we were enumerating it.
+            } catch (ElementNotAvailableException) {
+                // The window disappeared while we were enumerating it.
+            }
+        }
+
+        return null;
     }
 
     AutomationElement? FindStartWindow() {
         foreach (var window in GetProcessWindowsInSearchOrder()) {
-            if (string.Equals(window.Current.AutomationId, StartWindowId, StringComparison.Ordinal)) {
+            if (string.Equals(TryGetCurrentAutomationId(window), StartWindowId, StringComparison.Ordinal)) {
                 return window;
             }
 
@@ -790,22 +1380,22 @@ public sealed class AvaloniaUIDriver {
             .ToList();
 
         if (preferredHandle is int preferred) {
-            var preferredWindow = candidates.FirstOrDefault(window => window.Current.NativeWindowHandle == preferred);
-            if (preferredWindow != null && preferredWindow.Current.NativeWindowHandle != disallowedHandle) {
+            var preferredWindow = candidates.FirstOrDefault(window => TryGetNativeWindowHandle(window) == preferred);
+            if (preferredWindow != null && TryGetNativeWindowHandle(preferredWindow) != disallowedHandle) {
                 return preferredWindow;
             }
         }
 
-        return candidates.FirstOrDefault(window => window.Current.NativeWindowHandle != disallowedHandle);
+        return candidates.FirstOrDefault(window => TryGetNativeWindowHandle(window) != disallowedHandle);
     }
 
     AutomationElement? FindSettingsWindow() {
         foreach (var window in GetProcessWindowsInSearchOrder()) {
-            if (string.Equals(window.Current.AutomationId, SettingsWindowId, StringComparison.Ordinal)) {
+            if (string.Equals(TryGetCurrentAutomationId(window), SettingsWindowId, StringComparison.Ordinal)) {
                 return window;
             }
 
-            if (string.Equals(window.Current.Name ?? string.Empty, "Settings", StringComparison.OrdinalIgnoreCase)) {
+            if (string.Equals(TryGetCurrentName(window), "Settings", StringComparison.OrdinalIgnoreCase)) {
                 return window;
             }
         }
@@ -825,12 +1415,18 @@ public sealed class AvaloniaUIDriver {
     }
 
     static AutomationElement? FindByAutomationIdWithin(AutomationElement scope, string automationId) {
-        if (string.Equals(scope.Current.AutomationId, automationId, StringComparison.Ordinal)) {
-            return scope;
-        }
+        try {
+            if (string.Equals(TryGetCurrentAutomationId(scope), automationId, StringComparison.Ordinal)) {
+                return scope;
+            }
 
-        var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-        return scope.FindFirst(TreeScope.Descendants, condition);
+            var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+            return scope.FindFirst(TreeScope.Descendants, condition);
+        } catch (COMException) {
+            return null;
+        } catch (ElementNotAvailableException) {
+            return null;
+        }
     }
 
     AutomationElement? FindElementByName(string name, ControlType controlType) {
@@ -838,9 +1434,15 @@ public sealed class AvaloniaUIDriver {
             var condition = new AndCondition(
                 new PropertyCondition(AutomationElement.ControlTypeProperty, controlType),
                 new PropertyCondition(AutomationElement.NameProperty, name));
-            var element = window.FindFirst(TreeScope.Descendants, condition);
-            if (element != null) {
-                return element;
+            try {
+                var element = window.FindFirst(TreeScope.Descendants, condition);
+                if (element != null) {
+                    return element;
+                }
+            } catch (COMException) {
+                // The window disappeared while we were enumerating it.
+            } catch (ElementNotAvailableException) {
+                // The window disappeared while we were enumerating it.
             }
         }
 
@@ -849,7 +1451,7 @@ public sealed class AvaloniaUIDriver {
 
     AutomationElement? FindWindowByTitle(string title) {
         return GetProcessWindowsInSearchOrder().FirstOrDefault(window =>
-            string.Equals(window.Current.Name ?? string.Empty, title, StringComparison.OrdinalIgnoreCase));
+            string.Equals(TryGetCurrentName(window), title, StringComparison.OrdinalIgnoreCase));
     }
 
     AutomationElement? FindMenuItem(string menuLabel, AutomationElement scope) {
@@ -859,7 +1461,7 @@ public sealed class AvaloniaUIDriver {
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem));
 
         foreach (AutomationElement item in allMenuItems) {
-            if (NormalizeUiLabel(item.Current.Name) == target) {
+            if (NormalizeUiLabel(TryGetCurrentName(item)) == target) {
                 return item;
             }
         }
@@ -869,7 +1471,7 @@ public sealed class AvaloniaUIDriver {
                 TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem));
             foreach (AutomationElement item in items) {
-                if (NormalizeUiLabel(item.Current.Name) == target) {
+                if (NormalizeUiLabel(TryGetCurrentName(item)) == target) {
                     return item;
                 }
             }
@@ -902,10 +1504,10 @@ public sealed class AvaloniaUIDriver {
                 return menuItem;
             }
 
-            if (menuItem.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj)) {
+            ClickElement(menuItem);
+            if (menuItem.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandObj) &&
+                ((ExpandCollapsePattern)expandObj).Current.ExpandCollapseState == ExpandCollapseState.Collapsed) {
                 ((ExpandCollapsePattern)expandObj).Expand();
-            } else {
-                ClickElement(menuItem);
             }
 
             currentScope = menuItem;
@@ -938,7 +1540,7 @@ public sealed class AvaloniaUIDriver {
         foreach (var window in GetProcessWindowsInSearchOrder()) {
             var descendants = window.FindAll(TreeScope.Descendants, Condition.TrueCondition);
             foreach (AutomationElement descendant in descendants) {
-                if ((descendant.Current.Name ?? string.Empty).Contains(text, StringComparison.OrdinalIgnoreCase)) {
+                if (TryGetCurrentName(descendant).Contains(text, StringComparison.OrdinalIgnoreCase)) {
                     return descendant;
                 }
 
@@ -953,13 +1555,13 @@ public sealed class AvaloniaUIDriver {
     }
 
     AutomationElement? FindListItemContainingText(AutomationElement list, string text) {
-        if ((list.Current.Name ?? string.Empty).Contains(text, StringComparison.OrdinalIgnoreCase)) {
+        if (TryGetCurrentName(list).Contains(text, StringComparison.OrdinalIgnoreCase)) {
             return list;
         }
 
         var descendants = list.FindAll(TreeScope.Descendants, Condition.TrueCondition);
         foreach (AutomationElement descendant in descendants) {
-            var name = descendant.Current.Name ?? string.Empty;
+            var name = TryGetCurrentName(descendant);
             if (!name.Contains(text, StringComparison.OrdinalIgnoreCase)) {
                 continue;
             }
@@ -984,6 +1586,41 @@ public sealed class AvaloniaUIDriver {
         }
 
         return null;
+    }
+
+    static AutomationElement? FindNamedDescendant(AutomationElement container, string elementName) {
+        try {
+            if (string.Equals(TryGetCurrentName(container), elementName, StringComparison.OrdinalIgnoreCase)) {
+                return container;
+            }
+
+            var descendants = container.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            foreach (AutomationElement descendant in descendants) {
+                if (string.Equals(TryGetCurrentName(descendant), elementName, StringComparison.OrdinalIgnoreCase)) {
+                    return descendant;
+                }
+            }
+        } catch (COMException) {
+            return null;
+        } catch (ElementNotAvailableException) {
+            return null;
+        }
+
+        return null;
+    }
+
+    static Bitmap CaptureScreenRegion(System.Windows.Rect bounds) {
+        var width = Math.Max(1, (int)Math.Ceiling(bounds.Width));
+        var height = Math.Max(1, (int)Math.Ceiling(bounds.Height));
+        var bitmap = new Bitmap(width, height);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.CopyFromScreen(
+            (int)Math.Floor(bounds.Left),
+            (int)Math.Floor(bounds.Top),
+            0,
+            0,
+            new Size(width, height));
+        return bitmap;
     }
 
     static AutomationElement? SafeGetParent(AutomationElement element) {
@@ -1011,16 +1648,16 @@ public sealed class AvaloniaUIDriver {
     IEnumerable<AutomationElement> GetProcessWindowsInSearchOrder() {
         var foregroundHandle = GetForegroundWindow();
         return GetProcessWindows()
-            .OrderBy(window => new IntPtr(window.Current.NativeWindowHandle) != foregroundHandle)
-            .ThenBy(window => window.Current.IsOffscreen)
-            .ThenByDescending(window => window.Current.NativeWindowHandle);
+            .OrderBy(window => new IntPtr(TryGetNativeWindowHandle(window)) != foregroundHandle)
+            .ThenBy(window => TryGetIsOffscreen(window))
+            .ThenByDescending(window => TryGetNativeWindowHandle(window));
     }
 
     IEnumerable<AutomationElement> GetDialogWindowsInSearchOrder() {
         return GetProcessWindowsInSearchOrder()
             .Where(window => {
-                var id = window.Current.AutomationId ?? string.Empty;
-                var title = window.Current.Name ?? string.Empty;
+                var id = TryGetCurrentAutomationId(window);
+                var title = TryGetCurrentName(window);
                 return id.StartsWith("Dialog", StringComparison.Ordinal) ||
                     !string.Equals(title, "Edda", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(title, "Settings", StringComparison.OrdinalIgnoreCase);
@@ -1112,14 +1749,29 @@ public sealed class AvaloniaUIDriver {
     }
 
     void FocusElementWindow(AutomationElement element) {
+        var window = FindOwningWindow(element);
+        if (window != null) {
+            FocusWindow(window);
+        }
+    }
+
+    void PrepareWindowForPointInput(AutomationElement element) {
+        var window = FindOwningWindow(element);
+        if (window == null) {
+            FocusElementWindow(element);
+            return;
+        }
+
+        ActivateWindowForPointInput(window);
+    }
+
+    static AutomationElement? FindOwningWindow(AutomationElement element) {
         var current = element;
-        while (current != null && !Equals(current.Current.ControlType, ControlType.Window)) {
+        while (current != null && !Equals(TryGetCurrentControlType(current), ControlType.Window)) {
             current = SafeGetParent(current);
         }
 
-        if (current != null) {
-            FocusWindow(current);
-        }
+        return current;
     }
 
     static void FocusWindow(AutomationElement window) {
@@ -1136,6 +1788,43 @@ public sealed class AvaloniaUIDriver {
         TrySetFocus(window);
     }
 
+    static void ActivateWindowForPointInput(AutomationElement window) {
+        FocusWindow(window);
+
+        try {
+            var bounds = window.Current.BoundingRectangle;
+            if (bounds.Width <= 60 || bounds.Height <= 20) {
+                return;
+            }
+
+            var x = (int)(bounds.Left + Math.Min(120, Math.Max(40, bounds.Width * 0.25)));
+            var y = (int)(bounds.Top + Math.Min(24, Math.Max(8, bounds.Height * 0.05)));
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            SendMouseButton(MouseEventFLeftDown);
+            Thread.Sleep(20);
+            SendMouseButton(MouseEventFLeftUp);
+            Thread.Sleep(40);
+        } catch {
+            // Best effort activation for physical pointer input.
+        }
+    }
+
+    AutomationElement ResolvePointInteractionElement(AutomationElement element) {
+        try {
+            if (string.Equals(TryGetCurrentAutomationId(element), "scrollEditor", StringComparison.Ordinal)) {
+                var inputLayer = FindByAutomationIdWithin(element, "scrollEditorInputLayer");
+                if (inputLayer != null) {
+                    return inputLayer;
+                }
+            }
+        } catch {
+            // Fall back to the original element when the descendant lookup churns.
+        }
+
+        return element;
+    }
+
     static void PhysicalClickElement(AutomationElement element) {
         TrySetFocus(element);
         var bounds = element.Current.BoundingRectangle;
@@ -1143,9 +1832,33 @@ public sealed class AvaloniaUIDriver {
         var y = (int)(bounds.Top + bounds.Height / 2);
         SetCursorPos(x, y);
         Thread.Sleep(20);
-        mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftDown);
         Thread.Sleep(20);
-        mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+        SendMouseButton(MouseEventFLeftUp);
+    }
+
+    static void SendMouseButton(uint flags) {
+        SendMouseInput(flags, 0);
+    }
+
+    static void SendMouseWheel(int delta) {
+        SendMouseInput(MouseEventFWheel, delta);
+    }
+
+    static void SendMouseInput(uint flags, int mouseData) {
+        var inputs = new[] {
+            new Input {
+                type = InputMouse,
+                U = new InputUnion {
+                    mi = new MouseInput {
+                        dwFlags = flags,
+                        mouseData = mouseData
+                    }
+                }
+            }
+        };
+
+        _ = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
     }
 
     static void TrySetFocus(AutomationElement element) {
@@ -1164,11 +1877,12 @@ public sealed class AvaloniaUIDriver {
         var text = element.FindFirst(
             TreeScope.Descendants,
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text));
-        if (text != null && !string.IsNullOrWhiteSpace(text.Current.Name)) {
-            return text.Current.Name;
+        var textName = text != null ? TryGetCurrentName(text) : string.Empty;
+        if (!string.IsNullOrWhiteSpace(textName)) {
+            return textName;
         }
 
-        return element.Current.Name ?? string.Empty;
+        return TryGetCurrentName(element);
     }
 
     static bool IsMeaningfulElement(AutomationElement element) {
@@ -1199,7 +1913,7 @@ public sealed class AvaloniaUIDriver {
     }
 
     string WithDiagnostics(string message) {
-        return $"{message}{Environment.NewLine}{GetProcessDebugSummary()}{Environment.NewLine}{GetWindowDebugSummary()}{Environment.NewLine}{GetExceptionLogSummary()}";
+        return $"{message}{Environment.NewLine}{GetProcessDebugSummary()}{Environment.NewLine}{GetWindowDebugSummary()}{Environment.NewLine}{GetExceptionLogSummary()}{Environment.NewLine}{GetStandardErrorLogSummary()}";
     }
 
     string WithDiagnostics(string message, bool includeDebugLog) {
@@ -1207,7 +1921,7 @@ public sealed class AvaloniaUIDriver {
             return WithDiagnostics(message);
         }
 
-        return $"{message}{Environment.NewLine}{GetProcessDebugSummary()}{Environment.NewLine}{GetWindowDebugSummary()}{Environment.NewLine}{GetExceptionLogSummary()}{Environment.NewLine}{GetDebugLogSummary()}";
+        return $"{message}{Environment.NewLine}{GetProcessDebugSummary()}{Environment.NewLine}{GetWindowDebugSummary()}{Environment.NewLine}{GetExceptionLogSummary()}{Environment.NewLine}{GetStandardOutputLogSummary()}{Environment.NewLine}{GetStandardErrorLogSummary()}{Environment.NewLine}{GetDebugLogSummary()}{Environment.NewLine}{GetDriverLogSummary()}";
     }
 
     string GetProcessDebugSummary() {
@@ -1226,17 +1940,23 @@ public sealed class AvaloniaUIDriver {
         }
     }
 
-    string GetWindowDebugSummary() {
+    public string GetWindowDebugSummary() {
         var windows = GetProcessWindows()
             .Select(window => {
-                var title = window.Current.Name ?? string.Empty;
-                var automationId = window.Current.AutomationId ?? string.Empty;
-                var handle = window.Current.NativeWindowHandle;
-                var offscreen = window.Current.IsOffscreen;
+                var title = TryGetCurrentName(window);
+                var automationId = TryGetCurrentAutomationId(window);
+                var handle = TryGetNativeWindowHandle(window);
+                var offscreen = TryGetIsOffscreen(window);
                 return $"Window(title='{title}', id='{automationId}', hwnd={handle}, offscreen={offscreen}, descendants=[{DescribeWindowDescendants(window)}])";
             });
 
         return $"Visible Avalonia windows: {string.Join(" | ", windows)}";
+    }
+
+    public string GetTestLog() {
+        var exceptionSummary = GetExceptionLogSummary();
+        var debugSummary = GetDebugLogSummary();
+        return $"{exceptionSummary}{Environment.NewLine}{debugSummary}".Trim();
     }
 
     string GetExceptionLogSummary() {
@@ -1273,15 +1993,103 @@ public sealed class AvaloniaUIDriver {
         }
     }
 
+    string GetDriverLogSummary() {
+        if (string.IsNullOrWhiteSpace(driverLogFilePath) || !File.Exists(driverLogFilePath)) {
+            return "Driver log: empty";
+        }
+
+        try {
+            var contents = File.ReadAllText(driverLogFilePath);
+            if (string.IsNullOrWhiteSpace(contents)) {
+                return "Driver log: empty";
+            }
+
+            return $"Driver log:{Environment.NewLine}{contents}";
+        } catch (Exception ex) {
+            return $"Driver log unavailable: {ex.Message}";
+        }
+    }
+
+    string GetStandardOutputLogSummary() {
+        return GetProcessLogSummary(standardOutputLogFilePath, "Stdout log");
+    }
+
+    string GetStandardErrorLogSummary() {
+        return GetProcessLogSummary(standardErrorLogFilePath, "Stderr log");
+    }
+
+    static string GetProcessLogSummary(string? filePath, string label) {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) {
+            return $"{label}: empty";
+        }
+
+        try {
+            var contents = File.ReadAllText(filePath);
+            if (string.IsNullOrWhiteSpace(contents)) {
+                return $"{label}: empty";
+            }
+
+            return $"{label}:{Environment.NewLine}{contents}";
+        } catch (Exception ex) {
+            return $"{label} unavailable: {ex.Message}";
+        }
+    }
+
+    static void AppendProcessLogLine(string? filePath, string? line) {
+        if (string.IsNullOrWhiteSpace(filePath) || line == null) {
+            return;
+        }
+
+        try {
+            File.AppendAllText(filePath, $"{line}{Environment.NewLine}");
+        } catch {
+            // Best effort diagnostics only.
+        }
+    }
+
+    void WriteDriverLog(string message) {
+        if (string.IsNullOrWhiteSpace(driverLogFilePath)) {
+            return;
+        }
+
+        try {
+            File.AppendAllText(driverLogFilePath, $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}");
+        } catch {
+            // Best effort diagnostics only.
+        }
+    }
+
+    static string DescribeElementAtScreenPoint(int x, int y) {
+        try {
+            var element = AutomationElement.FromPoint(new System.Windows.Point(x, y));
+            if (element == null) {
+                return "<null>";
+            }
+
+            var name = TryGetCurrentName(element);
+            var id = TryGetCurrentAutomationId(element);
+            var controlType = TryGetCurrentControlType(element)?.ProgrammaticName ?? "unknown";
+            return $"name='{name}' id='{id}' type='{controlType}'";
+        } catch (ElementNotAvailableException) {
+            return "<not-available>";
+        } catch (COMException ex) {
+            return $"<com:{ex.HResult}>";
+        }
+    }
+
+    static string DescribeBounds(System.Windows.Rect bounds) {
+        return $"({bounds.Left:0.##},{bounds.Top:0.##},{bounds.Width:0.##},{bounds.Height:0.##})";
+    }
+
     static string DescribeWindowDescendants(AutomationElement window) {
         try {
             return string.Join(", ",
                 window.FindAll(TreeScope.Descendants, Condition.TrueCondition)
                     .Cast<AutomationElement>()
                     .Select(element => {
-                        var id = element.Current.AutomationId ?? string.Empty;
-                        var name = element.Current.Name ?? string.Empty;
-                        var controlType = element.Current.ControlType?.ProgrammaticName ?? "unknown";
+                        var id = TryGetCurrentAutomationId(element);
+                        var name = TryGetCurrentName(element);
+                        var controlType = TryGetCurrentControlType(element)?.ProgrammaticName ?? "unknown";
                         return (id, name, controlType);
                     })
                     .Where(element => !string.IsNullOrWhiteSpace(element.id) || !string.IsNullOrWhiteSpace(element.name))
@@ -1291,6 +2099,82 @@ public sealed class AvaloniaUIDriver {
             return "descendants unavailable";
         } catch (ElementNotAvailableException) {
             return "descendants unavailable";
+        }
+    }
+
+    static string TryGetCurrentAutomationId(AutomationElement element) {
+        try {
+            return element.Current.AutomationId ?? string.Empty;
+        } catch (COMException) {
+            return string.Empty;
+        } catch (ElementNotAvailableException) {
+            return string.Empty;
+        }
+    }
+
+    static string TryGetCurrentName(AutomationElement element) {
+        try {
+            return element.Current.Name ?? string.Empty;
+        } catch (COMException) {
+            return string.Empty;
+        } catch (ElementNotAvailableException) {
+            return string.Empty;
+        }
+    }
+
+    static ControlType? TryGetCurrentControlType(AutomationElement element) {
+        try {
+            return element.Current.ControlType;
+        } catch (COMException) {
+            return null;
+        } catch (ElementNotAvailableException) {
+            return null;
+        }
+    }
+
+    static int TryGetNativeWindowHandle(AutomationElement element) {
+        try {
+            return element.Current.NativeWindowHandle;
+        } catch (COMException) {
+            return 0;
+        } catch (ElementNotAvailableException) {
+            return 0;
+        }
+    }
+
+    static bool TryGetIsOffscreen(AutomationElement element) {
+        try {
+            return element.Current.IsOffscreen;
+        } catch (COMException) {
+            return true;
+        } catch (ElementNotAvailableException) {
+            return true;
+        }
+    }
+
+    static bool IsElementEnabled(AutomationElement element) {
+        try {
+            if (!element.Current.IsEnabled) {
+                return false;
+            }
+
+            var controlType = TryGetCurrentControlType(element);
+            if ((Equals(controlType, ControlType.Button) || Equals(controlType, ControlType.Slider)) &&
+                !element.Current.IsKeyboardFocusable) {
+                return false;
+            }
+
+            if (Equals(controlType, ControlType.Slider) &&
+                element.TryGetCurrentPattern(RangeValuePattern.Pattern, out var rangePatternObj) &&
+                ((RangeValuePattern)rangePatternObj).Current.IsReadOnly) {
+                return false;
+            }
+
+            return true;
+        } catch (COMException) {
+            return false;
+        } catch (ElementNotAvailableException) {
+            return false;
         }
     }
 
@@ -1314,12 +2198,62 @@ public sealed class AvaloniaUIDriver {
         };
     }
 
+    string CaptureWindowTopologySnapshot() {
+        try {
+            return string.Join("|",
+                GetProcessWindows()
+                    .Select(window => $"{TryGetNativeWindowHandle(window)}:{TryGetCurrentAutomationId(window)}:{TryGetCurrentName(window)}:{TryGetIsOffscreen(window)}")
+                    .OrderBy(entry => entry, StringComparer.Ordinal));
+        } catch {
+            return string.Empty;
+        }
+    }
+
+    static bool IsCachedElementUsable(AutomationElement element, string expectedAutomationId) {
+        try {
+            return string.Equals(TryGetCurrentAutomationId(element), expectedAutomationId, StringComparison.Ordinal);
+        } catch {
+            return false;
+        }
+    }
+
+    static bool ShouldCacheElementId(string automationId) {
+        return automationId is
+            "btnSongPlayer" or
+            "sliderSongProgress" or
+            "sliderSongTempo" or
+            "btnPlayPreview" or
+            "btnAddDifficulty" or
+            "btnChangeDifficulty0";
+    }
+
+    void PrimeElementCache(AutomationElement scope, params string[] automationIds) {
+        foreach (var automationId in automationIds) {
+            if (string.IsNullOrWhiteSpace(automationId)) {
+                continue;
+            }
+
+            var element = FindByAutomationIdWithin(scope, automationId);
+            if (element != null) {
+                elementCache[automationId] = element;
+            }
+        }
+    }
+
     static string ResolveDialogButtonAutomationId(string buttonName) {
         return buttonName switch {
             "Yes" => "DialogButtonYes",
             "No" => "DialogButtonNo",
             "Cancel" => "DialogButtonCancel",
             "OK" => "DialogButtonOk",
+            _ => string.Empty
+        };
+    }
+
+    static string ResolveMenuPathAutomationId(string path) {
+        return path.Trim() switch {
+            "Edit>Snap Notes to Grid" => "MenuItemSnapToGrid",
+            "Tools>Settings" => "MenuItemSettings",
             _ => string.Empty
         };
     }
@@ -1335,9 +2269,10 @@ public sealed class AvaloniaUIDriver {
     void MarkMainWindowReplacementExpected() {
         var currentMainWindow = FindMainWindow();
         if (currentMainWindow != null) {
-            pendingMainWindowReplacementSourceHandle = currentMainWindow.Current.NativeWindowHandle;
-            lastKnownMainWindowHandle = currentMainWindow.Current.NativeWindowHandle;
+            pendingMainWindowReplacementSourceHandle = TryGetNativeWindowHandle(currentMainWindow);
+            lastKnownMainWindowHandle = TryGetNativeWindowHandle(currentMainWindow);
         }
+        elementCache.Clear();
     }
 
     static bool PathTriggersMainWindowReplacement(string path) {
@@ -1354,12 +2289,33 @@ public sealed class AvaloniaUIDriver {
         return normalized is "ctrl+o" or "ctrl+n" or "ctrl+i";
     }
 
+    static void CleanupStaleProcesses(string? processName) {
+        if (string.IsNullOrWhiteSpace(processName)) {
+            return;
+        }
+
+        foreach (var process in Process.GetProcessesByName(processName)) {
+            try {
+                if (process.HasExited) {
+                    continue;
+                }
+
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
+            } catch {
+                // Best effort cleanup before launching a new isolated app instance.
+            } finally {
+                process.Dispose();
+            }
+        }
+    }
+
     static bool IsMainWindowCandidate(AutomationElement window) {
-        if (string.Equals(window.Current.AutomationId, MainWindowId, StringComparison.Ordinal)) {
+        if (string.Equals(TryGetCurrentAutomationId(window), MainWindowId, StringComparison.Ordinal)) {
             return true;
         }
 
-        if (string.Equals(window.Current.Name ?? string.Empty, MainWindowFallbackTitle, StringComparison.OrdinalIgnoreCase) &&
+        if (string.Equals(TryGetCurrentName(window), MainWindowFallbackTitle, StringComparison.OrdinalIgnoreCase) &&
             MainWindowSentinelIds.Any(id => FindByAutomationIdWithin(window, id) != null)) {
             return true;
         }
@@ -1370,9 +2326,15 @@ public sealed class AvaloniaUIDriver {
     static AutomationElement WaitForElement(Func<AutomationElement?> finder, TimeSpan timeout, string description) {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline) {
-            var element = finder();
-            if (element != null) {
-                return element;
+            try {
+                var element = finder();
+                if (element != null) {
+                    return element;
+                }
+            } catch (COMException) {
+                // A window disappeared while we were enumerating the automation tree. Retry.
+            } catch (ElementNotAvailableException) {
+                // A window disappeared while we were enumerating the automation tree. Retry.
             }
 
             Thread.Sleep(50);
@@ -1384,8 +2346,14 @@ public sealed class AvaloniaUIDriver {
     static bool WaitUntil(Func<bool> condition, TimeSpan timeout) {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline) {
-            if (condition()) {
-                return true;
+            try {
+                if (condition()) {
+                    return true;
+                }
+            } catch (COMException) {
+                // A window disappeared while we were enumerating the automation tree. Retry.
+            } catch (ElementNotAvailableException) {
+                // A window disappeared while we were enumerating the automation tree. Retry.
             }
 
             Thread.Sleep(50);
@@ -1476,10 +2444,41 @@ public sealed class AvaloniaUIDriver {
     }
 
     static (int x, int y) ResolvePointInElement(AutomationElement element, double xRatio, double yRatio) {
-        var bounds = element.Current.BoundingRectangle;
+        var bounds = ResolveVisibleBounds(element);
         var x = (int)(bounds.Left + bounds.Width * ClampRatio(xRatio));
         var y = (int)(bounds.Top + bounds.Height * ClampRatio(yRatio));
         return (x, y);
+    }
+
+    static System.Windows.Rect ResolveVisibleBounds(AutomationElement element) {
+        var bounds = element.Current.BoundingRectangle;
+        var current = element;
+        while (true) {
+            current = SafeGetParent(current);
+            if (current == null) {
+                break;
+            }
+
+            try {
+                var parentBounds = current.Current.BoundingRectangle;
+                if (parentBounds.Width > 1 && parentBounds.Height > 1) {
+                    var intersected = System.Windows.Rect.Intersect(bounds, parentBounds);
+                    if (intersected.Width > 1 && intersected.Height > 1) {
+                        bounds = intersected;
+                    }
+                }
+
+                if (Equals(TryGetCurrentControlType(current), ControlType.Window)) {
+                    break;
+                }
+            } catch (ElementNotAvailableException) {
+                break;
+            } catch (COMException) {
+                break;
+            }
+        }
+
+        return bounds;
     }
 
     static void PerformLeftDoubleClick(int x, int y) {
@@ -1528,6 +2527,24 @@ public sealed class AvaloniaUIDriver {
             case "ctrl+a":
                 SendCombo(VirtualKeyControl, 0x41);
                 break;
+            case "ctrl+b":
+                SendCombo(VirtualKeyControl, 0x42);
+                break;
+            case "ctrl+t":
+                SendCombo(VirtualKeyControl, 0x54);
+                break;
+            case "ctrl+shift+t":
+                SendCombo(VirtualKeyControl, VirtualKeyShift, 0x54);
+                break;
+            case "ctrl+z":
+                SendCombo(VirtualKeyControl, 0x5A);
+                break;
+            case "ctrl+y":
+                SendCombo(VirtualKeyControl, 0x59);
+                break;
+            case "ctrl+shift+z":
+                SendCombo(VirtualKeyControl, VirtualKeyShift, 0x5A);
+                break;
             case "alt+f4":
                 SendCombo(VirtualKeyAlt, 0x73);
                 break;
@@ -1543,6 +2560,21 @@ public sealed class AvaloniaUIDriver {
             case "escape":
                 SendKey(0x1B);
                 break;
+            case "delete":
+                SendKey(0x2E);
+                break;
+            case "1":
+                SendKey(0x31);
+                break;
+            case "2":
+                SendKey(0x32);
+                break;
+            case "3":
+                SendKey(0x33);
+                break;
+            case "4":
+                SendKey(0x34);
+                break;
             default:
                 throw new NotSupportedException($"Unsupported keyboard shortcut '{shortcut}'.");
         }
@@ -1557,6 +2589,21 @@ public sealed class AvaloniaUIDriver {
         keybd_event(0, scanCode, KeyEventFScancode | KeyEventFKeyUp, UIntPtr.Zero);
         Thread.Sleep(10);
         keybd_event(modifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
+    }
+
+    static void SendCombo(byte firstModifier, byte secondModifier, byte key) {
+        var scanCode = (byte)MapVirtualKey(key, 0);
+        keybd_event(firstModifier, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(10);
+        keybd_event(secondModifier, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(10);
+        keybd_event(0, scanCode, KeyEventFScancode, UIntPtr.Zero);
+        Thread.Sleep(10);
+        keybd_event(0, scanCode, KeyEventFScancode | KeyEventFKeyUp, UIntPtr.Zero);
+        Thread.Sleep(10);
+        keybd_event(secondModifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
+        Thread.Sleep(10);
+        keybd_event(firstModifier, 0, KeyEventFKeyUp, UIntPtr.Zero);
     }
 
     static void SendComboUsingScanCode(byte modifier, byte key) {
@@ -1613,6 +2660,12 @@ public sealed class AvaloniaUIDriver {
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool MoveWindow(IntPtr hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
+
     [DllImport("user32.dll")]
     static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -1627,4 +2680,29 @@ public sealed class AvaloniaUIDriver {
 
     [DllImport("user32.dll")]
     static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern uint SendInput(uint nInputs, [In] Input[] pInputs, int cbSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct Input {
+        public int type;
+        public InputUnion U;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct InputUnion {
+        [FieldOffset(0)]
+        public MouseInput mi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MouseInput {
+        public int dx;
+        public int dy;
+        public int mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
 }

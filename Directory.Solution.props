@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <BuildInParallel>false</BuildInParallel>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)tests\serial-test-execution.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+</Project>

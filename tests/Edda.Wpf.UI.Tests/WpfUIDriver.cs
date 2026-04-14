@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -52,6 +53,7 @@ namespace Edda.Wpf.UI.Tests {
 
         private Process? appProcess;
         private readonly Dictionary<string, string?> launchEnvironmentOverrides = new(StringComparer.OrdinalIgnoreCase);
+        private string? launchWorkingDirectory;
         private string? pickerSelectionQueueFilePath;
         private string? testProfileRoot;
 
@@ -65,6 +67,10 @@ namespace Edda.Wpf.UI.Tests {
             } else {
                 launchEnvironmentOverrides[key] = value;
             }
+        }
+
+        public void SetLaunchWorkingDirectory(string? path) {
+            launchWorkingDirectory = string.IsNullOrWhiteSpace(path) ? null : path;
         }
 
         public void Launch() {
@@ -90,7 +96,7 @@ namespace Edda.Wpf.UI.Tests {
             } else {
                 startInfo.FileName = appPath;
             }
-            startInfo.WorkingDirectory = Path.GetDirectoryName(appPath) ?? Directory.GetCurrentDirectory();
+            startInfo.WorkingDirectory = launchWorkingDirectory ?? Path.GetDirectoryName(appPath) ?? Directory.GetCurrentDirectory();
             startInfo.Environment["APPDATA"] = appDataRoot;
             startInfo.Environment["LOCALAPPDATA"] = localAppDataRoot;
             startInfo.Environment[PickerQueueFileEnvironmentVariable] = pickerSelectionQueueFilePath;
@@ -137,6 +143,7 @@ namespace Edda.Wpf.UI.Tests {
             appProcess?.Dispose();
             appProcess = null;
             launchEnvironmentOverrides.Clear();
+            launchWorkingDirectory = null;
             pickerSelectionQueueFilePath = null;
 
             if (!string.IsNullOrWhiteSpace(testProfileRoot) && Directory.Exists(testProfileRoot)) {
@@ -247,10 +254,95 @@ namespace Edda.Wpf.UI.Tests {
             return element.Current.Name ?? string.Empty;
         }
 
+        public string GetItemStatus(string id) {
+            var element = GetElement(id);
+            return element.Current.ItemStatus ?? string.Empty;
+        }
+
         public (double left, double top, double width, double height) GetElementBounds(string id) {
             var element = GetElement(id);
             var bounds = element.Current.BoundingRectangle;
             return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+        }
+
+        public Bitmap CaptureElementBitmap(string id) {
+            var element = GetElement(id);
+            return CaptureScreenRegion(element.Current.BoundingRectangle);
+        }
+
+        public Bitmap CaptureNamedElementBitmapWithin(string containerId, string elementName) {
+            var container = GetElement(containerId);
+            var element = WaitForElement(
+                () => FindNamedDescendant(container, elementName),
+                defaultTimeout,
+                $"Element named '{elementName}' inside '{containerId}'");
+            return CaptureScreenRegion(element.Current.BoundingRectangle);
+        }
+
+        public (double left, double top, double width, double height) GetNamedElementBoundsWithin(string containerId, string elementName) {
+            var container = GetElement(containerId);
+            var element = WaitForElement(
+                () => FindNamedDescendant(container, elementName),
+                defaultTimeout,
+                $"Element named '{elementName}' inside '{containerId}'");
+            var bounds = element.Current.BoundingRectangle;
+            return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+        }
+
+        public string GetNamedElementItemStatusWithin(string containerId, string elementName) {
+            var container = GetElement(containerId);
+            var element = WaitForElement(
+                () => FindNamedDescendant(container, elementName),
+                defaultTimeout,
+                $"Element named '{elementName}' inside '{containerId}'");
+            return element.Current.ItemStatus ?? string.Empty;
+        }
+
+        public IReadOnlyList<(double left, double top, double width, double height)> GetVisibleDescendantBoundsWithin(string containerId, ControlType controlType) {
+            var container = GetElement(containerId);
+            var matches = container.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, controlType));
+
+            return matches
+                .Cast<AutomationElement>()
+                .Where(element => !element.Current.IsOffscreen && element.Current.BoundingRectangle.Width > 1 && element.Current.BoundingRectangle.Height > 1)
+                .Select(element => {
+                    var bounds = element.Current.BoundingRectangle;
+                    return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+                })
+                .ToList();
+        }
+
+        public void ResizeMainWindow(int width, int height) {
+            var mainWindow = FindMainWindow() ?? throw new InvalidOperationException("Main window is not available for resize.");
+            var handle = new IntPtr(mainWindow.Current.NativeWindowHandle);
+            if (handle == IntPtr.Zero) {
+                throw new InvalidOperationException("Main window handle was not available for resize.");
+            }
+
+            var bounds = mainWindow.Current.BoundingRectangle;
+            if (!MoveWindow(handle, (int)bounds.Left, (int)bounds.Top, width, height, true)) {
+                throw new InvalidOperationException("Could not resize the main window.");
+            }
+
+            WaitForIdle(TimeSpan.FromMilliseconds(450));
+        }
+
+        public void SetScrollViewerVerticalPercent(string id, double verticalPercent) {
+            var element = GetElement(id);
+            FocusElementWindow(element);
+            TrySetFocus(element);
+            if (!element.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollObj)) {
+                throw new InvalidOperationException($"Element '{id}' does not support scroll interaction.");
+            }
+
+            var scroll = (ScrollPattern)scrollObj;
+            var horizontalPercent = scroll.Current.HorizontallyScrollable
+                ? scroll.Current.HorizontalScrollPercent
+                : ScrollPattern.NoScroll;
+            scroll.SetScrollPercent(horizontalPercent, Math.Max(0, Math.Min(100, verticalPercent)));
+            WaitForIdle(TimeSpan.FromMilliseconds(350));
         }
 
         public bool IsVisible(string id) {
@@ -294,14 +386,6 @@ namespace Edda.Wpf.UI.Tests {
                 return;
             }
 
-            FocusElementWindow(element);
-            TrySetFocus(element);
-            SendKey(0x20); // Space
-            WaitForIdle();
-            if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
-                return;
-            }
-
             for (var attempt = 0; attempt < 2; attempt++) {
                 var bounds = element.Current.BoundingRectangle;
                 var x = (int)(bounds.Left + bounds.Width / 2);
@@ -320,6 +404,14 @@ namespace Edda.Wpf.UI.Tests {
             }
 
             toggle.Toggle();
+            WaitForIdle();
+            if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
+                return;
+            }
+
+            FocusElementWindow(element);
+            TrySetFocus(element);
+            SendKey(0x20); // Space
             WaitForIdle();
             if (WaitUntil(() => IsChecked(id) == value, TimeSpan.FromSeconds(1))) {
                 return;
@@ -905,6 +997,31 @@ namespace Edda.Wpf.UI.Tests {
             WaitForIdle();
         }
 
+        public void DragElementByOffset(string id, double startXRatio, double startYRatio, int deltaX, int deltaY) {
+            var element = GetElement(id);
+            FocusElementWindow(element);
+            var start = ResolvePointInElement(element, startXRatio, startYRatio);
+            var end = (x: start.x + deltaX, y: start.y + deltaY);
+
+            SetCursorPos(start.x, start.y);
+            Thread.Sleep(20);
+            mouse_event(MouseEventFLeftDown, 0, 0, 0, UIntPtr.Zero);
+            Thread.Sleep(40);
+
+            const int stepCount = 12;
+            for (var step = 1; step <= stepCount; step++) {
+                var progress = step / (double)stepCount;
+                var x = (int)Math.Round(start.x + ((end.x - start.x) * progress));
+                var y = (int)Math.Round(start.y + ((end.y - start.y) * progress));
+                SetCursorPos(x, y);
+                Thread.Sleep(25);
+            }
+
+            Thread.Sleep(40);
+            mouse_event(MouseEventFLeftUp, 0, 0, 0, UIntPtr.Zero);
+            WaitForIdle();
+        }
+
         public void Drag(string sourceId, string targetId) {
             var source = GetElement(sourceId);
             var target = GetElement(targetId);
@@ -1344,6 +1461,20 @@ namespace Edda.Wpf.UI.Tests {
         private static AutomationElement? FindNamedDescendant(AutomationElement scope, string name) {
             var condition = new PropertyCondition(AutomationElement.NameProperty, name);
             return scope.FindFirst(TreeScope.Descendants, condition);
+        }
+
+        private static Bitmap CaptureScreenRegion(System.Windows.Rect bounds) {
+            var width = Math.Max(1, (int)Math.Ceiling(bounds.Width));
+            var height = Math.Max(1, (int)Math.Ceiling(bounds.Height));
+            var bitmap = new Bitmap(width, height);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.CopyFromScreen(
+                (int)Math.Floor(bounds.Left),
+                (int)Math.Floor(bounds.Top),
+                0,
+                0,
+                new Size(width, height));
+            return bitmap;
         }
 
         private static AutomationElement? FindListItemContainingText(AutomationElement list, string text) {
@@ -2084,6 +2215,9 @@ namespace Edda.Wpf.UI.Tests {
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
 
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);

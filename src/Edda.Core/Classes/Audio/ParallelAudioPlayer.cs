@@ -14,13 +14,14 @@ public class ParallelAudioPlayer : IDisposable {
     int desiredLatency;
     string basePath;
     MMDevice playbackDevice;
+    bool useEventSync;
     DateTime[] lastPlayedTimes;
     AudioFileReader[] noteStreams;
     WasapiOut[] notePlayers;
     public bool isEnabled { get; set; }
     public bool isPanned { get; set; }
 
-    public ParallelAudioPlayer(MMDevice playbackDevice, string basePath, int streams, int desiredLatency, bool isEnabled, bool isPanned, float defaultVolume) {
+    public ParallelAudioPlayer(MMDevice playbackDevice, string basePath, int streams, int desiredLatency, bool isEnabled, bool isPanned, float defaultVolume, bool useEventSync = true) {
         lastPlayedStream = 0;
         this.streams = streams;
         this.isEnabled = isEnabled;
@@ -28,6 +29,7 @@ public class ParallelAudioPlayer : IDisposable {
         this.desiredLatency = desiredLatency;
         this.basePath = basePath;
         this.playbackDevice = playbackDevice;
+        this.useEventSync = useEventSync;
         uniqueSamples = 0;
         while (File.Exists(GetFilePath(basePath, uniqueSamples + 1))) {
             uniqueSamples++;
@@ -46,7 +48,7 @@ public class ParallelAudioPlayer : IDisposable {
             noteStreams[i] = new AudioFileReader(GetFilePath(basePath, (i % numChannels % uniqueSamples) + 1)) {
                 Volume = defaultVolume
             };
-            notePlayers[i] = new WasapiOut(playbackDevice, AudioClientShareMode.Shared, true, desiredLatency);
+            notePlayers[i] = new WasapiOut(playbackDevice, AudioClientShareMode.Shared, useEventSync, desiredLatency);
             if (isPanned && basePath != "mmatick") {
                 var mono = new StereoToMonoSampleProvider(noteStreams[i]);
                 if (basePath == "bassdrum") {
@@ -65,7 +67,7 @@ public class ParallelAudioPlayer : IDisposable {
             }
         }
     }
-    public ParallelAudioPlayer(MMDevice playbackDevice, string basePath, int streams, int desiredLatency, bool isPanned, float defaultVolume) : this(playbackDevice, basePath, streams, desiredLatency, true, isPanned, defaultVolume) { }
+    public ParallelAudioPlayer(MMDevice playbackDevice, string basePath, int streams, int desiredLatency, bool isPanned, float defaultVolume, bool useEventSync = true) : this(playbackDevice, basePath, streams, desiredLatency, true, isPanned, defaultVolume, useEventSync) { }
 
     public virtual bool Play() {
         return Play(0);
@@ -108,6 +110,17 @@ public class ParallelAudioPlayer : IDisposable {
         playbackDevice = null;
     }
     private string GetFilePath(string basePath, int sampleNumber) {
-        return $"{Program.ResourcesPath}{basePath}{sampleNumber}.wav";
+        var relativePath = Path.Combine("Resources", $"{basePath}{sampleNumber}.wav");
+        var appBasePath = Path.Combine(AppContext.BaseDirectory, relativePath);
+        if (File.Exists(appBasePath)) {
+            return appBasePath;
+        }
+
+        var workingDirectoryPath = Path.GetFullPath(relativePath);
+        if (File.Exists(workingDirectoryPath)) {
+            return workingDirectoryPath;
+        }
+
+        return appBasePath;
     }
 }

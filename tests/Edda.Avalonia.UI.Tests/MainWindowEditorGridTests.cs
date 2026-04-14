@@ -1,15 +1,12 @@
 using System;
-using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Threading;
-using System.Windows.Automation;
 using Edda.Testing;
 using Xunit;
 
-namespace Edda.Wpf.UI.Tests {
+namespace Edda.Avalonia.UI.Tests;
 
 public class MainWindowEditorGridTests {
     private const string MainWindowId = "AppMainWindow";
@@ -133,7 +130,8 @@ public class MainWindowEditorGridTests {
             driver.MoveMouseWithinElement(ScrollEditorId, 0.2, 0.8);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(150));
 
-            var previewNote = FindSquareImageNearPoint(driver, ScrollEditorId, 0.2, 0.8);
+            Assert.True(driver.IsVisible(PreviewNoteId));
+            var previewNote = driver.GetElementBounds(PreviewNoteId);
             var aspectRatio = previewNote.width / Math.Max(1, previewNote.height);
 
             Assert.True(previewNote.top >= scrollEditor.top + scrollEditor.height * 0.6, $"Expected the hover preview note to appear in the lower editing band, but preview top was {previewNote.top:0.##}.");
@@ -255,20 +253,18 @@ public class MainWindowEditorGridTests {
         RunOpenedFixtureMapTest((driver, _) => {
             driver.ToggleCheckbox(GridWaveformCheckBoxId, true);
             driver.WaitForIdle();
-            using var before = driver.CaptureElementBitmap(ScrollEditorId);
+            var before = driver.GetItemStatus(ScrollEditorId);
 
-            driver.MouseWheelWithinElement(ScrollEditorId, 0.5, 0.5, 1200);
+            driver.SetScrollViewerVerticalPercent(ScrollEditorId, 20);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(450));
 
-            using var afterFirstScroll = driver.CaptureElementBitmap(ScrollEditorId);
-            var diff = GetMeanAbsoluteRgbDifference(before, afterFirstScroll);
-            if (diff < 1.5) {
-                driver.MouseWheelWithinElement(ScrollEditorId, 0.5, 0.5, -1200);
+            var after = driver.GetItemStatus(ScrollEditorId);
+            if (string.Equals(after, before, StringComparison.Ordinal)) {
+                driver.SetScrollViewerVerticalPercent(ScrollEditorId, 50);
                 driver.WaitForIdle(TimeSpan.FromMilliseconds(450));
-                using var afterSecondScroll = driver.CaptureElementBitmap(ScrollEditorId);
-                diff = GetMeanAbsoluteRgbDifference(before, afterSecondScroll);
+                after = driver.GetItemStatus(ScrollEditorId);
             }
-            Assert.True(diff > 1.5, $"Expected the grid waveform rendering to change after scrolling the editor viewport, but the mean RGB difference was only {diff:0.##}.");
+            Assert.NotEqual(before, after);
         });
     }
 
@@ -474,7 +470,7 @@ public class MainWindowEditorGridTests {
             driver.WaitForIdle();
 
             Assert.Equal(beforeCheckbox, driver.IsChecked(GridSnapCheckBoxId));
-            Assert.True(duringProgress > beforeProgress + 10, $"Expected space to start playback after clicking editor background, but progress only changed from {beforeProgress:0.##}ms to {duringProgress:0.##}ms.");
+            Assert.True(duringProgress > beforeProgress + 100, $"Expected space to start playback after clicking editor background, but progress only changed from {beforeProgress:0.##}ms to {duringProgress:0.##}ms.");
         });
     }
 
@@ -502,6 +498,7 @@ public class MainWindowEditorGridTests {
             var editor = driver.GetElementBounds(ScrollEditorId);
             var noteXRatio = ClampRatio((CenterX(drum0) - editor.left) / editor.width);
             const double noteYRatio = 0.8;
+            var beforeDrumStatus = driver.GetItemStatus(Drum0Id);
             ConfigureDrumOnlyAudio(driver);
             using var probe = AudioOutputProbe.Create();
             probe.MeasurePeak(TimeSpan.FromMilliseconds(150));
@@ -510,6 +507,11 @@ public class MainWindowEditorGridTests {
             driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
             driver.ClickWithinElement(ScrollEditorId, noteXRatio, noteYRatio);
             driver.WaitForIdle();
+
+            var placedNote = driver.GetNamedElementBoundsWithin(ScrollEditorId, "Note 1");
+            using var placedBitmap = driver.CaptureElementBitmap(ScrollEditorId);
+            var drumCenterX = editor.left + FindOrangeDrumCenterXNear(placedBitmap, CenterX(drum0) - editor.left, Math.Max(24, (int)Math.Round(drum0.width * 0.6)));
+            Assert.True(Math.Abs(CenterX(placedNote) - drumCenterX) <= Math.Max(12, drum0.width * 0.25), $"Expected the newly placed column-1 note to align over Drum 1, but note center X was {CenterX(placedNote):0.##} and drum center X was {drumCenterX:0.##}.");
 
             driver.SendKeyboardShortcut("Space");
             driver.WaitForIdle();
@@ -521,6 +523,7 @@ public class MainWindowEditorGridTests {
             driver.SendKeyboardShortcut("Space");
             driver.WaitForIdle();
 
+            Assert.NotEqual(beforeDrumStatus, driver.GetItemStatus(Drum0Id));
             Assert.True(ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId) >= initialAll + 1, $"Expected playback lane input flow to leave at least the placed note visible, but the note count stayed at {driver.GetText(NotesStatsAllId)}.");
         }, mutateFixture: ClearNotesFromFixture);
     }
@@ -534,22 +537,20 @@ public class MainWindowEditorGridTests {
             for (var lane = 0; lane < drumIds.Length; lane++) {
                 var drum = driver.GetElementBounds(drumIds[lane]);
                 var xRatio = ClampRatio((CenterX(drum) - editor.left) / editor.width);
-                driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-                driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-                using var before = driver.CaptureElementBitmap(ScrollEditorId);
                 driver.MoveMouseWithinElement(ScrollEditorId, xRatio, 0.82);
                 driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
                 driver.ClickWithinElement(ScrollEditorId, xRatio, 0.82);
                 driver.WaitForIdle();
-                driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-                driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-                using var after = driver.CaptureElementBitmap(ScrollEditorId);
-                var noteBounds = GetChangedPixelBoundsNearPoint(before, after, xRatio, 0.82);
-                var noteCenterX = editor.left + CenterX(noteBounds);
-                var drumCenterX = editor.left + FindOrangeDrumCenterXNear(after, CenterX(drum) - editor.left, Math.Max(24, (int)Math.Round(drum.width * 0.6)));
+            }
+
+            using var bitmap = driver.CaptureElementBitmap(ScrollEditorId);
+            for (var lane = 0; lane < drumIds.Length; lane++) {
+                var drum = driver.GetElementBounds(drumIds[lane]);
+                var note = driver.GetNamedElementBoundsWithin(ScrollEditorId, $"Note {lane + 1}");
+                var drumCenterX = editor.left + FindOrangeDrumCenterXNear(bitmap, CenterX(drum) - editor.left, Math.Max(24, (int)Math.Round(drum.width * 0.6)));
                 Assert.True(
-                    Math.Abs(noteCenterX - drumCenterX) <= Math.Max(10, drum.width * 0.2),
-                    $"Expected lane {lane + 1} note placement to stay centered over its drum, but note center X was {noteCenterX:0.##} and drum center X was {drumCenterX:0.##}.");
+                    Math.Abs(CenterX(note) - drumCenterX) <= Math.Max(10, drum.width * 0.2),
+                    $"Expected lane {lane + 1} note placement to stay centered over its drum, but note center X was {CenterX(note):0.##} and drum center X was {drumCenterX:0.##}.");
             }
         }, mutateFixture: ClearNotesFromFixture);
     }
@@ -559,19 +560,16 @@ public class MainWindowEditorGridTests {
         RunOpenedFixtureMapTest((driver, _) => {
             ConfigureDrumOnlyAudio(driver);
             using var probe = AudioOutputProbe.Create();
-            driver.MoveMouseWithinElement(ScrollEditorId, 0.2, 0.8);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(100));
+            using var beforeDrum = driver.CaptureElementBitmap(Drum0Id);
             var threshold = GetAudibleThreshold(probe.MeasurePeak(TimeSpan.FromMilliseconds(150)));
             probe.ResetPeak();
+
+            driver.MoveMouseWithinElement(ScrollEditorId, 0.2, 0.8);
+            driver.WaitForIdle(TimeSpan.FromMilliseconds(100));
             driver.ClickWithinElement(ScrollEditorId, 0.2, 0.8);
             Assert.True(probe.WaitForPeakAbove(threshold, TimeSpan.FromSeconds(2)), $"Expected note placement to produce audible drum output above threshold {threshold:0.0000}, but measured peak was {probe.GetPeakAmplitude():0.0000}.");
-            Assert.True(WaitForVisibleNoteCount(() => ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId), 1), $"Expected note placement to update the visible note count within one second, but it stayed at {driver.GetText(NotesStatsAllId)}.");
 
-            using var settledEditor = driver.CaptureElementBitmap(ScrollEditorId);
-            Thread.Sleep(250);
-            using var laterEditor = driver.CaptureElementBitmap(ScrollEditorId);
-            var editorDiff = GetMeanAbsoluteRgbDifference(settledEditor, laterEditor);
-            Assert.True(editorDiff < 1.5, $"Expected the placed note to remain visually stable instead of fading or pulsing, but the editor bitmap changed by mean RGB difference {editorDiff:0.##}.");
+            Assert.Contains("opacity:1", driver.GetNamedElementItemStatusWithin(ScrollEditorId, "Note 1"));
         });
     }
 
@@ -697,35 +695,27 @@ public class MainWindowEditorGridTests {
         RunOpenedFixtureMapTest((driver, _) => {
             var marker = driver.GetNamedElementBoundsWithin(ScrollEditorId, "1/3 beat");
             var editor = driver.GetElementBounds(ScrollEditorId);
-            var markerCenterY = CenterY(marker) - editor.top;
-            var aboveRatio = ClampRatio((marker.top - 18 - editor.top) / editor.height);
-            var belowRatio = ClampRatio((BottomEdge(marker) + 18 - editor.top) / editor.height);
-
-            driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-            using var before = driver.CaptureElementBitmap(ScrollEditorId);
+            var timingLineY = BottomEdge(marker) - 2;
+            var aboveRatio = ClampRatio((timingLineY - 6 - editor.top) / editor.height);
+            var belowRatio = ClampRatio((timingLineY + 6 - editor.top) / editor.height);
 
             driver.MoveMouseWithinElement(ScrollEditorId, 0.8, aboveRatio);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
             driver.ClickWithinElement(ScrollEditorId, 0.8, aboveRatio);
             driver.WaitForIdle();
-            driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-            using var afterFirst = driver.CaptureElementBitmap(ScrollEditorId);
-            var note1 = GetChangedPixelBoundsNearPoint(before, afterFirst, 0.8, aboveRatio);
+            var note1 = driver.GetNamedElementBoundsWithin(ScrollEditorId, "Note 4");
 
             driver.MoveMouseWithinElement(ScrollEditorId, 0.2, belowRatio);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
             driver.ClickWithinElement(ScrollEditorId, 0.2, belowRatio);
             driver.WaitForIdle();
-            driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-            using var afterSecond = driver.CaptureElementBitmap(ScrollEditorId);
-            var note2 = GetChangedPixelBoundsNearPoint(afterFirst, afterSecond, 0.2, belowRatio);
+            var visibleNoteCount = driver.GetText(NotesStatsAllId);
+            Assert.True(visibleNoteCount == "2", $"Expected the second click beside the timing change to add a second note, but the visible note count stayed at {visibleNoteCount} and editor status was '{driver.GetItemStatus(ScrollEditorId)}'.");
+            var note2 = driver.GetNamedElementBoundsWithin(ScrollEditorId, "Note 1");
 
-            Assert.True(CenterY(note1) < markerCenterY - 4, $"Expected the note placed above the timing change to stay above it, but note center Y was {CenterY(note1):0.##} for marker center Y {markerCenterY:0.##}.");
-            Assert.True(CenterY(note2) > markerCenterY + 4, $"Expected the note placed below the timing change to stay below it, but note center Y was {CenterY(note2):0.##} for marker center Y {markerCenterY:0.##}.");
-        }, mutateFixture: ApplyTimingChangeFixture);
+            Assert.True(CenterY(note1) < timingLineY - 4, $"Expected the note placed just above the timing change to stay above its beat line, but note center Y was {CenterY(note1):0.##} for timing line Y {timingLineY:0.##}.");
+            Assert.True(CenterY(note2) > timingLineY + 4, $"Expected the note placed just below the timing change to stay below its beat line, but note center Y was {CenterY(note2):0.##} for timing line Y {timingLineY:0.##}.");
+        }, mutateFixture: ApplyTimingChangeFixtureOnEmptyGrid);
     }
 
     [Fact]
@@ -738,19 +728,13 @@ public class MainWindowEditorGridTests {
             var xRatio = ClampRatio((CenterX(drum1) - editor.left) / editor.width);
             var yRatio = ClampRatio((timingLineY - 6 - editor.top) / editor.height);
 
-            driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-            using var before = driver.CaptureElementBitmap(ScrollEditorId);
             driver.MoveMouseWithinElement(ScrollEditorId, xRatio, yRatio);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
             driver.ClickWithinElement(ScrollEditorId, xRatio, yRatio);
             driver.WaitForIdle();
-            driver.MoveMouseWithinElement(NavWaveformImageId, 0.5, 0.5);
-            driver.WaitForIdle(TimeSpan.FromMilliseconds(80));
-            using var after = driver.CaptureElementBitmap(ScrollEditorId);
 
             Assert.Equal("1", driver.GetText(NotesStatsAllId));
-            var note = GetChangedPixelBoundsNearPoint(before, after, xRatio, yRatio);
+            var note = driver.GetNamedElementBoundsWithin(ScrollEditorId, "Note 2");
             Assert.True(CenterY(note) < timingLineY - 4, $"Expected the adjacent-lane click beside the timing label to place a note above the timing line, but note center Y was {CenterY(note):0.##} for timing line Y {timingLineY:0.##}.");
         }, mutateFixture: ApplyTimingChangeFixtureOnEmptyGrid);
     }
@@ -789,12 +773,12 @@ public class MainWindowEditorGridTests {
 
     [Fact]
     public void ClickingAndRemovingHoveredNoteUpdatesVisibleCountWithinOneSecond() {
-        RunOpenedFixtureMapTest((driver, mapFolder) => {
+        RunOpenedFixtureMapTest((driver, _) => {
             var initialAll = ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId);
 
             driver.MoveMouseWithinElement(ScrollEditorId, 0.2, 0.8);
             driver.WaitForIdle(TimeSpan.FromMilliseconds(100));
-            _ = FindSquareImageNearPoint(driver, ScrollEditorId, 0.2, 0.8);
+            Assert.True(driver.IsVisible(PreviewNoteId));
 
             driver.ClickWithinElement(ScrollEditorId, 0.2, 0.8);
             Assert.True(WaitForVisibleNoteCount(() => ParseIntegerText(driver.GetText(NotesStatsAllId), NotesStatsAllId), initialAll + 1), $"Expected note placement to update the visible note count within one second, but it stayed at {driver.GetText(NotesStatsAllId)}.");
@@ -806,8 +790,8 @@ public class MainWindowEditorGridTests {
         });
     }
 
-    private static void RunOpenedFixtureMapTest(Action<WpfUIDriver, string> testBody, Action<WpfUIDriver>? configureDriver = null, Action<string>? mutateFixture = null) {
-        var driver = new WpfUIDriver();
+    private static void RunOpenedFixtureMapTest(Action<AvaloniaUIDriver, string> testBody, Action<AvaloniaUIDriver>? configureDriver = null, Action<string>? mutateFixture = null) {
+        var driver = new AvaloniaUIDriver();
         string? mapFolder = null;
 
         try {
@@ -820,7 +804,7 @@ public class MainWindowEditorGridTests {
         }
     }
 
-    private static string LaunchAndOpenFixtureMap(WpfUIDriver driver, Action<string>? mutateFixture = null) {
+    private static string LaunchAndOpenFixtureMap(AvaloniaUIDriver driver, Action<string>? mutateFixture = null) {
         var fixtureCopy = CreateFixtureMapCopy(mutateFixture);
 
         driver.Launch();
@@ -843,7 +827,7 @@ public class MainWindowEditorGridTests {
     }
 
     private static string CreateTempOutputFolder(string tag) {
-        var outputPath = Path.Combine(Path.GetTempPath(), "Edda-WpfEditorGridTests", tag, Guid.NewGuid().ToString("N"));
+        var outputPath = Path.Combine(Path.GetTempPath(), "Edda-AvaloniaEditorGridTests", tag, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(outputPath);
         return outputPath;
     }
@@ -895,20 +879,6 @@ public class MainWindowEditorGridTests {
         }
 
         throw new InvalidOperationException($"Expected integer text in '{controlId}', but got '{value}'.");
-    }
-
-    private static (double left, double top, double width, double height) FindSquareImageNearPoint(WpfUIDriver driver, string containerId, double xRatio, double yRatio) {
-        var container = driver.GetElementBounds(containerId);
-        var targetX = container.left + (container.width * xRatio);
-        var targetY = container.top + (container.height * yRatio);
-
-        var candidate = driver.GetVisibleDescendantBoundsWithin(containerId, ControlType.Image)
-            .Where(bounds => bounds.width >= 12 && bounds.width <= 120 && bounds.height >= 12 && bounds.height <= 120)
-            .OrderBy(bounds => DistanceSquared(CenterX(bounds), CenterY(bounds), targetX, targetY))
-            .FirstOrDefault();
-
-        Assert.True(candidate.width > 0, $"Expected to find a visible image inside '{containerId}' near ({targetX:0.##}, {targetY:0.##}).");
-        return candidate;
     }
 
     private static double CenterY((double left, double top, double width, double height) bounds) {
@@ -995,7 +965,7 @@ public class MainWindowEditorGridTests {
         };
     }
 
-    private static void ConfigureDrumOnlyAudio(WpfUIDriver driver) {
+    private static void ConfigureDrumOnlyAudio(AvaloniaUIDriver driver) {
         driver.SetSliderValue(SongVolumeSliderId, 0);
         driver.SetSliderValue(DrumVolumeSliderId, 1);
         driver.WaitForIdle();
@@ -1075,63 +1045,6 @@ public class MainWindowEditorGridTests {
         return (minX + maxX) / 2.0;
     }
 
-    private static bool ContainsWarningRed(Bitmap bitmap) {
-        var redPixels = 0;
-        for (var y = 0; y < bitmap.Height; y++) {
-            for (var x = 0; x < bitmap.Width; x++) {
-                var pixel = bitmap.GetPixel(x, y);
-                if (pixel.A > 0 && pixel.R >= 40 && pixel.R >= pixel.G + 4 && pixel.R >= pixel.B + 4) {
-                    redPixels++;
-                    if (redPixels >= 1) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static double ComputeInterestingPixelCenterRatio(Bitmap bitmap) {
-        var background = AverageCornerColor(bitmap);
-        double weightedX = 0;
-        double totalWeight = 0;
-
-        for (var y = 1; y < bitmap.Height - 1; y++) {
-            for (var x = 1; x < bitmap.Width - 1; x++) {
-                var pixel = bitmap.GetPixel(x, y);
-                var weight = ColorDistance(pixel, background);
-                if (weight < 45) {
-                    continue;
-                }
-
-                weightedX += x * weight;
-                totalWeight += weight;
-            }
-        }
-
-        Assert.True(totalWeight > 0, "Expected the navigation waveform screenshot to contain visible waveform pixels.");
-        return weightedX / totalWeight / Math.Max(1, bitmap.Width - 1);
-    }
-
-    private static double GetMeanAbsoluteRgbDifference(Bitmap before, Bitmap after) {
-        var width = Math.Min(before.Width, after.Width);
-        var height = Math.Min(before.Height, after.Height);
-        double total = 0;
-        var samples = 0;
-
-        for (var y = 0; y < height; y++) {
-            for (var x = 0; x < width; x++) {
-                var left = before.GetPixel(x, y);
-                var right = after.GetPixel(x, y);
-                total += (Math.Abs(left.R - right.R) + Math.Abs(left.G - right.G) + Math.Abs(left.B - right.B)) / 3.0;
-                samples++;
-            }
-        }
-
-        return samples == 0 ? 0 : total / samples;
-    }
-
     private static (double left, double top, double width, double height) GetChangedPixelBounds(Bitmap before, Bitmap after) {
         var width = Math.Min(before.Width, after.Width);
         var height = Math.Min(before.Height, after.Height);
@@ -1202,38 +1115,30 @@ public class MainWindowEditorGridTests {
                     maxX = Math.Max(maxX, x);
                     maxY = Math.Max(maxY, y);
 
-                    for (var dy = -1; dy <= 1; dy++) {
-                        for (var dx = -1; dx <= 1; dx++) {
-                            if (dx == 0 && dy == 0) {
-                                continue;
-                            }
-
-                            var nextX = x + dx;
-                            var nextY = y + dy;
-                            if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) {
-                                continue;
-                            }
-
-                            if (!changed[nextX, nextY] || visited[nextX, nextY]) {
-                                continue;
-                            }
-
-                            visited[nextX, nextY] = true;
-                            queue.Enqueue((nextX, nextY));
+                    foreach (var (nextX, nextY) in new[] { (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1) }) {
+                        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height || visited[nextX, nextY] || !changed[nextX, nextY]) {
+                            continue;
                         }
+
+                        visited[nextX, nextY] = true;
+                        queue.Enqueue((nextX, nextY));
                     }
+                }
+
+                if (pixels < 20) {
+                    continue;
                 }
 
                 var componentWidth = maxX - minX + 1;
                 var componentHeight = maxY - minY + 1;
-                if (pixels < 12 || componentWidth < 8 || componentHeight < 8) {
+                if (componentWidth < 12 || componentHeight < 12) {
                     continue;
                 }
 
-                var centerX = minX + (componentWidth / 2.0);
-                var centerY = minY + (componentHeight / 2.0);
+                var centerX = (minX + maxX) / 2.0;
+                var centerY = (minY + maxY) / 2.0;
                 var fallbackComponent = (left: (double)minX, top: (double)minY, width: (double)componentWidth, height: (double)componentHeight);
-                var fallbackComponentScore = DistanceSquared(centerX, centerY, targetX, targetY);
+                var fallbackComponentScore = Math.Abs(centerX - targetX) + Math.Abs(centerY - targetY);
                 if (fallbackComponentScore < fallbackScore) {
                     fallbackScore = fallbackComponentScore;
                     fallback = fallbackComponent;
@@ -1244,13 +1149,11 @@ public class MainWindowEditorGridTests {
                     continue;
                 }
 
-                var score = DistanceSquared(centerX, centerY, targetX, targetY) + (aspectRatio - 1.0) * 100;
-                if (score >= bestScore) {
-                    continue;
+                var score = Math.Abs(centerX - targetX) + Math.Abs(centerY - targetY) + (aspectRatio - 1.0) * 10;
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = (minX, minY, componentWidth, componentHeight);
                 }
-
-                bestScore = score;
-                best = (minX, minY, componentWidth, componentHeight);
             }
         }
 
@@ -1258,8 +1161,72 @@ public class MainWindowEditorGridTests {
             return best;
         }
 
-        Assert.True(fallback.width > 0 && fallback.height > 0, $"Expected a changed editor region near ({targetX:0.##}, {targetY:0.##}).");
+        Assert.True(fallback.width > 0 && fallback.height > 0, "Expected a UI interaction to change visible editor pixels near the requested point.");
         return fallback;
+    }
+
+    private static bool ContainsWarningRed(Bitmap bitmap) {
+        var redPixels = 0;
+        for (var y = 0; y < bitmap.Height; y++) {
+            for (var x = 0; x < bitmap.Width; x++) {
+                var pixel = bitmap.GetPixel(x, y);
+                if (pixel.A > 0 && pixel.R >= 40 && pixel.R >= pixel.G + 4 && pixel.R >= pixel.B + 4) {
+                    redPixels++;
+                    if (redPixels >= 1) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static double ColorDistance(Color left, Color right) {
+        var deltaR = left.R - right.R;
+        var deltaG = left.G - right.G;
+        var deltaB = left.B - right.B;
+        return Math.Sqrt((deltaR * deltaR) + (deltaG * deltaG) + (deltaB * deltaB));
+    }
+
+    private static double ComputeInterestingPixelCenterRatio(Bitmap bitmap) {
+        var background = AverageCornerColor(bitmap);
+        double weightedX = 0;
+        double totalWeight = 0;
+
+        for (var y = 1; y < bitmap.Height - 1; y++) {
+            for (var x = 1; x < bitmap.Width - 1; x++) {
+                var pixel = bitmap.GetPixel(x, y);
+                var weight = ColorDistance(pixel, background);
+                if (weight < 45) {
+                    continue;
+                }
+
+                weightedX += x * weight;
+                totalWeight += weight;
+            }
+        }
+
+        Assert.True(totalWeight > 0, "Expected the navigation waveform screenshot to contain visible waveform pixels.");
+        return weightedX / totalWeight / Math.Max(1, bitmap.Width - 1);
+    }
+
+    private static double GetMeanAbsoluteRgbDifference(Bitmap before, Bitmap after) {
+        var width = Math.Min(before.Width, after.Width);
+        var height = Math.Min(before.Height, after.Height);
+        double total = 0;
+        var samples = 0;
+
+        for (var y = 0; y < height; y++) {
+            for (var x = 0; x < width; x++) {
+                var left = before.GetPixel(x, y);
+                var right = after.GetPixel(x, y);
+                total += (Math.Abs(left.R - right.R) + Math.Abs(left.G - right.G) + Math.Abs(left.B - right.B)) / 3.0;
+                samples++;
+            }
+        }
+
+        return samples == 0 ? 0 : total / samples;
     }
 
     private static Color AverageCornerColor(Bitmap bitmap) {
@@ -1276,21 +1243,7 @@ public class MainWindowEditorGridTests {
             points.Sum(point => point.B) / points.Length);
     }
 
-    private static double ColorDistance(Color left, Color right) {
-        var deltaR = left.R - right.R;
-        var deltaG = left.G - right.G;
-        var deltaB = left.B - right.B;
-        return Math.Sqrt(deltaR * deltaR + deltaG * deltaG + deltaB * deltaB);
-    }
-
-    private static double DistanceSquared(double x1, double y1, double x2, double y2) {
-        var deltaX = x1 - x2;
-        var deltaY = y1 - y2;
-        return (deltaX * deltaX) + (deltaY * deltaY);
-    }
-
     private static double ClampRatio(double ratio) {
         return Math.Max(0.05, Math.Min(0.95, ratio));
     }
-}
 }

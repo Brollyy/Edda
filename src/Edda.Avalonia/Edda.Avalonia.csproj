@@ -12,7 +12,22 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.12" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
+    <PackageReference Include="Spectrogram" Version="1.6.1" />
     <ProjectReference Include="..\Edda.Core\Edda.Core.csproj" />
     <ProjectReference Include="..\Edda.App\Edda.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\Edda.Core\Resources\*.png" Link="Resources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\*.wav" Link="Resources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\ffmpeg.exe" Link="Resources\ffmpeg.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>

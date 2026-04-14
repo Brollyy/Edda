@@ -83,26 +83,71 @@ public class VorbisSpectrogramGenerator : IDisposable {
 
         // if we have valid cache, don't bother doing anything
         if (!CacheIsValid(numChunks)) {
-            cachedSpectrograms = new ImageSource[numChunks];
-            // check for existing BMP files in the map cache folder first
             try {
-                if (LoadMapCacheChunkFiles(numChunks)) {
-                    return cachedSpectrograms;
-                }
-            } catch (Exception ex) {
-                Trace.WriteLine(ex);
-            }
-            // fallback to generating BMPs if needed
-            try {
-                cachedSpectrograms = _Draw(numChunks, tokenSource.Token);
-            } catch (Exception ex) {
+                isDrawing = true;
+                using var bitmapSet = Edda.VorbisSpectrogramBitmapRenderer.Render(
+                    filePath,
+                    cache,
+                    MapType(type),
+                    MapQuality(quality),
+                    maxFreq,
+                    colormap,
+                    drawFlipped,
+                    numChunks,
+                    tokenSource.Token);
+
+                cachedSpectrograms = bitmapSet?.Bitmaps
+                    .Select(BitmapToImageSource)
+                    .ToArray();
+            } catch (OperationCanceledException) {
                 isDrawing = false;
+                return cachedSpectrograms;
+            } catch (Exception ex) {
                 Trace.WriteLine(ex);
+            } finally {
+                isDrawing = false;
+            }
+
+            if (cachedSpectrograms == null || cachedSpectrograms.Length != numChunks) {
+                cachedSpectrograms = null;
             }
         }
 
         return cachedSpectrograms;
     }
+
+    private static Edda.VorbisSpectrogramBitmapRenderer.SpectrogramType MapType(SpectrogramType type) {
+        return type switch {
+            SpectrogramType.MelScale => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramType.MelScale,
+            SpectrogramType.MaxScale => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramType.MaxScale,
+            _ => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramType.Standard
+        };
+    }
+
+    private static Edda.VorbisSpectrogramBitmapRenderer.SpectrogramQuality MapQuality(SpectrogramQuality quality) {
+        return quality switch {
+            SpectrogramQuality.Low => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramQuality.Low,
+            SpectrogramQuality.High => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramQuality.High,
+            _ => Edda.VorbisSpectrogramBitmapRenderer.SpectrogramQuality.Medium
+        };
+    }
+
+    private ImageSource BitmapToImageSource(Bitmap bmp) {
+        IntPtr hBitmap = bmp.GetHbitmap();
+        try {
+            BitmapSource wpfBmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
+                hBitmap,
+                IntPtr.Zero,
+                Int32Rect.Empty,
+                BitmapSizeOptions.FromWidthAndHeight(bmp.Width, bmp.Height)
+            );
+            wpfBmp.Freeze();
+            return wpfBmp;
+        } finally {
+            DeleteObject(hBitmap);
+        }
+    }
+
     private ImageSource[] _Draw(int numChunks, CancellationToken ct) {
         isDrawing = true;
         VorbisWaveReader reader = new(filePath);

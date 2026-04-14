@@ -4,46 +4,108 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.VisualTree;
+using Avalonia.Threading;
 using Edda.Avalonia.Services;
+using Edda.Classes.MapEditorNS;
 using Edda.Classes.MapEditorNS.NoteNS;
 using Edda.Classes.MapEditorNS.Stats;
 using Edda.Const;
 using Edda.Startup;
 using Newtonsoft.Json.Linq;
+using NAudio.CoreAudioApi;
 using NAudio.Vorbis;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using SoundTouch.Net.NAudioSupport;
 using AvaloniaColor = Avalonia.Media.Color;
 using Button = Avalonia.Controls.Button;
 using EddaProgram = Edda.Const.Program;
+using Line = Avalonia.Controls.Shapes.Line;
 using PixelPoint = Avalonia.PixelPoint;
+using Rectangle = Avalonia.Controls.Shapes.Rectangle;
 using TextBox = Avalonia.Controls.TextBox;
 
 namespace Edda.Avalonia.Windows;
 
-public sealed class MainWindow : Window {
+public sealed partial class MainWindow : Window {
     readonly AppSession appSession;
     readonly UserSettingsManager userSettings;
     readonly EditorUiAdapter mapEditorUiAdapter;
+    readonly DispatcherTimer songPositionTimer;
+    readonly List<PlaybackDeviceOption> playbackDevices = [];
 
     MapEditor? mapEditor;
     bool suppressControlEvents;
     bool textInputHasFocus;
     bool songIsPlaying;
+    bool songPauseInProgress;
     bool snapToGrid = true;
     bool navWaveformDragging;
+    bool spectrogramResizeDragging;
+    Button? overlayPressedButton;
     double currentSongDurationSeconds;
     double currentSongPositionMilliseconds;
+    int editorAudioLatency;
+    int drumFeedbackSequence;
+    int noteFeedbackSequence;
+    const double SpectrogramResizeGripWidth = 8;
+    const double SidebarDockWidth = 240;
+    double spectrogramPreferredWidth = 100;
+    double spectrogramResizeDragOriginX;
+    double spectrogramResizeDragOriginWidth;
+
+    SongPreviewController? songPreviewController;
+    CancellationTokenSource songPlaybackCancellationTokenSource = new();
+    readonly Stopwatch playbackClock = new();
+    double playbackStartMilliseconds;
+    MMDeviceEnumerator? deviceEnumerator;
+    DeviceChangeListener? deviceChangeListener;
+    SampleChannel? songChannel;
+    VorbisWaveReader? songStream;
+    SoundTouchWaveStream? songTempoStream;
+    WasapiOut? songPlayer;
+    ParallelAudioPlayer? drummer;
+    ParallelAudioPlayer? metronome;
+    NoteScanner? noteScanner;
+    BeatScanner? beatScanner;
+
+    readonly Dictionary<string, Bitmap?> resourceBitmapCache = new(StringComparer.OrdinalIgnoreCase);
 
     MenuItem menuItemSnapToGrid = null!;
     MenuItem menuItemClearCache = null!;
     Border leftSidebar = null!;
     Border rightSidebar = null!;
+    Grid gridSpectrogram = null!;
+    Border borderSpectrogram = null!;
+    Button spectrogramResize = null!;
+    Border borderNavWaveform = null!;
+    ScrollViewer scrollSpectrogram = null!;
+    Canvas spectrogramCanvas = null!;
+    Canvas mainWaveformCanvas = null!;
+    Canvas navWaveformBackdrop = null!;
+    Grid navWaveformVisualHost = null!;
+    Line lineSongMouseover = null!;
+    Line lineSongProgress = null!;
+    Line lineBeatScan = null!;
+    Canvas canvasBookmarkLabels = null!;
+    Canvas canvasTimingChangeLabels = null!;
+    global::Avalonia.Controls.Image drum0 = null!;
+    global::Avalonia.Controls.Image drum1 = null!;
+    global::Avalonia.Controls.Image drum2 = null!;
+    global::Avalonia.Controls.Image drum3 = null!;
 
     Window? bpmFinderWindow;
     Window? predictorWindow;
@@ -53,6 +115,14 @@ public sealed class MainWindow : Window {
     Window? songPreviewWindow;
 
     public string WindowId => "AppMainWindow";
+    internal AppSession Session => appSession;
+    internal UserSettingsManager UserSettings => userSettings;
+    internal MapEditor? MapEditorInstance => mapEditor;
+    internal string? CurrentMapFolder => mapEditor?.mapFolder;
+    internal string? CurrentSongPath => mapEditor == null ? null : Path.Combine(mapEditor.mapFolder, GetMapString("_songFilename"));
+    internal double CurrentSongPositionMilliseconds => currentSongPositionMilliseconds;
+    internal double CurrentGlobalBpm => GetMapDouble("_beatsPerMinute");
+    internal int CurrentGridDivision => Math.Max(1, GetMapInt("_editorGridDivision", RagnarockMapDifficulties.Current, custom: true));
 
     public TextBox TxtSongName { get; private set; } = null!;
     public TextBox TxtArtistName { get; private set; } = null!;
@@ -76,6 +146,7 @@ public sealed class MainWindow : Window {
     public Slider SliderDrumVol { get; private set; } = null!;
     public TextBlock TxtSongTempo { get; private set; } = null!;
     public TextBlock TxtSongPosition { get; private set; } = null!;
+    public TextBlock TxtSongDuration { get; private set; } = null!;
     public TextBlock TxtSongVol { get; private set; } = null!;
     public TextBlock TxtDrumVol { get; private set; } = null!;
     public CheckBox CheckMetronome { get; private set; } = null!;
@@ -85,10 +156,14 @@ public sealed class MainWindow : Window {
     public TextBox TxtGridSpacing { get; private set; } = null!;
     public TextBlock LblSelectedBeat { get; private set; } = null!;
     public TextBlock DifficultyPrediction { get; private set; } = null!;
-    public Border ImgWaveformVertical { get; private set; } = null!;
-    public TextBlock CanvasBookmarks { get; private set; } = null!;
-    public TextBlock CanvasTimingChanges { get; private set; } = null!;
-    public TextBlock CanvasNavNotes { get; private set; } = null!;
+    public Button ImgWaveformVertical { get; private set; } = null!;
+    public Canvas CanvasBookmarks { get; private set; } = null!;
+    public Canvas CanvasTimingChanges { get; private set; } = null!;
+    public Canvas CanvasNavNotes { get; private set; } = null!;
+    public Canvas CanvasNavInputBox { get; private set; } = null!;
+    public global::Avalonia.Controls.Image ImgCover { get; private set; } = null!;
+
+    Bitmap? coverPreviewBitmap;
 
     public Button BtnChangeDifficulty0 { get; private set; } = null!;
     public Button BtnChangeDifficulty1 { get; private set; } = null!;
@@ -100,8 +175,11 @@ public sealed class MainWindow : Window {
     public TextBox TxtDistMedal0 { get; private set; } = null!;
     public TextBox TxtDistMedal1 { get; private set; } = null!;
     public TextBox TxtDistMedal2 { get; private set; } = null!;
+    Border difficultySlot0 = null!;
+    Border difficultySlot1 = null!;
+    Border difficultySlot2 = null!;
 
-    public IReadOnlyList<PlaybackDeviceOption> PlaybackDevices { get; }
+    public IReadOnlyList<PlaybackDeviceOption> PlaybackDevices => playbackDevices;
     public string? PlaybackDeviceId { get; private set; }
     public bool PlayingOnDefaultDevice { get; private set; } = true;
     public bool DefaultDeviceAvailable => PlaybackDevices.Count > 0;
@@ -109,29 +187,294 @@ public sealed class MainWindow : Window {
     public MainWindow(AppSession appSession, MapDocumentSummary summary) {
         this.appSession = appSession;
         userSettings = appSession.UserSettings;
-        mapEditorUiAdapter = new EditorUiAdapter(userSettings);
+        mapEditorUiAdapter = new EditorUiAdapter(this, userSettings);
 
         AutomationHelper.SetAutomationId(this, WindowId);
         Title = "Edda";
-        Width = 1180;
-        Height = 820;
-        MinWidth = 980;
-        MinHeight = 640;
-        Position = new PixelPoint(160, 140);
+        Width = 1000;
+        Height = 870;
+        MinWidth = 1000;
+        MinHeight = 450;
+        CanResize = true;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        PlaybackDevices = [
-            new PlaybackDeviceOption("speakers", "Speakers"),
-            new PlaybackDeviceOption("headphones", "Headphones")
-        ];
+        if (OperatingSystem.IsWindows()) {
+            deviceEnumerator = new MMDeviceEnumerator();
+            deviceChangeListener = new DeviceChangeListener(new AvaloniaDeviceChangeUiAdapter(this));
+            deviceEnumerator.RegisterEndpointNotificationCallback(deviceChangeListener);
+            playbackDevices.AddRange(ResolvePlaybackDevices());
+        }
+
+        songPositionTimer = new DispatcherTimer {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        songPositionTimer.Tick += (_, _) => {
+            try {
+                UpdatePlaybackPositionFromAudio();
+            } catch (Exception) {
+                PauseSong();
+            }
+        };
+        songPreviewController = new SongPreviewController(new AvaloniaSongPreviewUiAdapter(this));
 
         Content = BuildRoot();
-        Closed += (_, _) => mapEditor?.Dispose();
-        KeyDown += OnKeyDown;
+        PropertyChanged += OnMainWindowPropertyChanged;
+        AddHandler(InputElement.PointerPressedEvent, OnWindowPointerTracePressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(InputElement.PointerMovedEvent, OnWindowPointerTraceMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(InputElement.PointerReleasedEvent, OnWindowPointerTraceReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(InputElement.PointerWheelChangedEvent, OnWindowPointerTraceWheelChanged, RoutingStrategies.Tunnel, handledEventsToo: true);
+        Opened += (_, _) => {
+            CenterAndConstrainToWorkingArea();
+            DisableInactiveOverlayHitTesting();
+            QueuePostLayoutEditorSync();
+        };
+        Closed += (_, _) => {
+            DisposeWindowResources();
+        };
+        AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(InputElement.KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel, handledEventsToo: true);
 
         LoadMap(summary.MapFolder);
         LoadSettingsFile();
         SetSnapToGrid(true);
         UpdatePlaybackUi();
+    }
+
+    void OnWindowPointerTracePressed(object? sender, PointerPressedEventArgs e) {
+        var windowPosition = e.GetPosition(this);
+        if (TryRouteOverlayPointerToNavWaveform(e.Source, windowPosition, onPressed: () => OnNavWaveformPointerPressed(ImgWaveformVertical, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (TryRouteOverlayPointerToSpectrogramResize(e.Source, windowPosition, onPressed: () => OnSpectrogramResizePointerPressed(spectrogramResize, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (TryHandleOverlayButtonPointerPressed(e.Source, windowPosition)) {
+            e.Handled = true;
+            return;
+        }
+
+        if (ShouldRouteWindowPointerToEditor(e.Source, windowPosition)) {
+            OnScrollEditorPointerPressed(scrollEditorInputLayer, e);
+        }
+    }
+
+    void OnWindowPointerTraceMoved(object? sender, PointerEventArgs e) {
+        var windowPosition = e.GetPosition(this);
+        if (TryRouteOverlayPointerToNavWaveform(e.Source, windowPosition, onPressed: null, onMoved: () => OnNavWaveformPointerMoved(ImgWaveformVertical, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (TryRouteOverlayPointerToSpectrogramResize(e.Source, windowPosition, onPressed: null, onMoved: () => OnSpectrogramResizePointerMoved(spectrogramResize, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (ShouldRouteWindowPointerToEditor(e.Source, windowPosition, allowActiveGesture: true)) {
+            OnScrollEditorPointerMoved(scrollEditorInputLayer, e);
+        }
+    }
+
+    void OnWindowPointerTraceReleased(object? sender, PointerReleasedEventArgs e) {
+        var windowPosition = e.GetPosition(this);
+        if (TryRouteOverlayPointerToNavWaveform(e.Source, windowPosition, onPressed: null, onMoved: null, onReleased: () => OnNavWaveformPointerReleased(ImgWaveformVertical, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (TryRouteOverlayPointerToSpectrogramResize(e.Source, windowPosition, onPressed: null, onMoved: null, onReleased: () => OnSpectrogramResizePointerReleased(spectrogramResize, e))) {
+            e.Handled = true;
+            return;
+        }
+
+        if (TryHandleOverlayButtonPointerReleased(e.Source, windowPosition)) {
+            e.Handled = true;
+            return;
+        }
+
+        if (ShouldRouteWindowPointerToEditor(e.Source, windowPosition, allowActiveGesture: true)) {
+            OnScrollEditorPointerReleased(scrollEditorInputLayer, e);
+        }
+    }
+
+    void OnWindowPointerTraceWheelChanged(object? sender, PointerWheelEventArgs e) {
+        var windowPosition = e.GetPosition(this);
+        if (ShouldRouteWindowPointerToEditor(e.Source, windowPosition, allowActiveGesture: true)) {
+            OnScrollEditorPointerWheelChanged(scrollEditorInputLayer, e);
+        }
+    }
+
+    static string DescribePointerSource(object? source) {
+        if (source is StyledElement styledElement) {
+            return AutomationProperties.GetAutomationId(styledElement) ??
+                styledElement.Name ??
+                styledElement.GetType().Name;
+        }
+
+        return source?.GetType().Name ?? "<null>";
+    }
+
+    bool ShouldRouteWindowPointerToEditor(object? source, Point windowPosition, bool allowActiveGesture = false) {
+        if (scrollEditorInputLayer == null) {
+            return false;
+        }
+
+        var sourceTypeName = source?.GetType().Name;
+        if (!string.Equals(sourceTypeName, "LightDismissOverlayLayer", StringComparison.Ordinal) &&
+            !(allowActiveGesture && editorPointerPressed)) {
+            return false;
+        }
+
+        var viewportOrigin = scrollEditor.TranslatePoint(new Point(0, 0), this);
+        if (!viewportOrigin.HasValue) {
+            return false;
+        }
+
+        var viewportBounds = new Rect(viewportOrigin.Value, scrollEditor.Bounds.Size);
+        return viewportBounds.Contains(windowPosition);
+    }
+
+    bool TryRouteOverlayPointerToNavWaveform(
+        object? source,
+        Point windowPosition,
+        Action? onPressed,
+        Action? onMoved = null,
+        Action? onReleased = null) {
+        if (ImgWaveformVertical == null || !string.Equals(source?.GetType().Name, "LightDismissOverlayLayer", StringComparison.Ordinal)) {
+            return false;
+        }
+
+        if (!navWaveformDragging && !IsWindowPointWithinControl(ImgWaveformVertical, windowPosition)) {
+            return false;
+        }
+
+        onPressed?.Invoke();
+        onMoved?.Invoke();
+        onReleased?.Invoke();
+        return true;
+    }
+
+    bool TryRouteOverlayPointerToSpectrogramResize(
+        object? source,
+        Point windowPosition,
+        Action? onPressed,
+        Action? onMoved = null,
+        Action? onReleased = null) {
+        if (spectrogramResize == null || !string.Equals(source?.GetType().Name, "LightDismissOverlayLayer", StringComparison.Ordinal)) {
+            return false;
+        }
+
+        if (!spectrogramResizeDragging && !IsWindowPointWithinControl(spectrogramResize, windowPosition)) {
+            return false;
+        }
+
+        onPressed?.Invoke();
+        onMoved?.Invoke();
+        onReleased?.Invoke();
+        return true;
+    }
+
+    bool TryHandleOverlayButtonPointerPressed(object? source, Point windowPosition) {
+        if (!string.Equals(source?.GetType().Name, "LightDismissOverlayLayer", StringComparison.Ordinal)) {
+            return false;
+        }
+
+        overlayPressedButton = ResolveUnderlyingButton(windowPosition);
+        return overlayPressedButton != null;
+    }
+
+    bool TryHandleOverlayButtonPointerReleased(object? source, Point windowPosition) {
+        if (!string.Equals(source?.GetType().Name, "LightDismissOverlayLayer", StringComparison.Ordinal)) {
+            overlayPressedButton = null;
+            return false;
+        }
+
+        var pressedButton = overlayPressedButton;
+        overlayPressedButton = null;
+        if (pressedButton == null) {
+            return false;
+        }
+
+        var releasedButton = ResolveUnderlyingButton(windowPosition);
+        if (!ReferenceEquals(pressedButton, releasedButton)) {
+            return false;
+        }
+
+        pressedButton.Focus();
+        pressedButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        return true;
+    }
+
+    Button? ResolveUnderlyingButton(Point windowPosition) {
+        return this.GetVisualDescendants()
+            .OfType<Button>()
+            .Where(button =>
+                !ReferenceEquals(button, ImgWaveformVertical) &&
+                button.IsVisible &&
+                button.IsEnabled &&
+                button.IsHitTestVisible &&
+                button.TranslatePoint(new Point(0, 0), this) is Point origin &&
+                new Rect(origin, button.Bounds.Size).Contains(windowPosition))
+            .OrderBy(button => button.Bounds.Width * button.Bounds.Height)
+            .FirstOrDefault();
+    }
+
+    bool IsWindowPointWithinControl(Control control, Point windowPosition) {
+        var origin = control.TranslatePoint(new Point(0, 0), this);
+        return origin.HasValue && new Rect(origin.Value, control.Bounds.Size).Contains(windowPosition);
+    }
+
+    void DisableInactiveOverlayHitTesting() {
+        Dispatcher.UIThread.Post(() => {
+            foreach (var inputElement in this.GetVisualDescendants().OfType<InputElement>()) {
+                if (!string.Equals(inputElement.GetType().Name, "LightDismissOverlayLayer", StringComparison.Ordinal)) {
+                    continue;
+                }
+
+                inputElement.IsHitTestVisible = false;
+            }
+        }, DispatcherPriority.Loaded);
+    }
+
+    void CenterAndConstrainToWorkingArea() {
+        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        if (screen == null) {
+            return;
+        }
+
+        var workingArea = screen.WorkingArea;
+        var scaling = Math.Max(1, RenderScaling);
+        var maxWidth = Math.Max(960, (workingArea.Width - 32) / scaling);
+        var maxHeight = Math.Max(620, (workingArea.Height - 32) / scaling);
+        var constrainedWidth = Math.Min(Width, maxWidth);
+        var constrainedHeight = Math.Min(Height, maxHeight);
+
+        MinWidth = Math.Min(MinWidth, constrainedWidth);
+        MinHeight = Math.Min(MinHeight, constrainedHeight);
+        Width = constrainedWidth;
+        Height = constrainedHeight;
+
+        var widthPixels = (int)Math.Round(constrainedWidth * scaling);
+        var heightPixels = (int)Math.Round(constrainedHeight * scaling);
+        var centeredX = workingArea.X + Math.Max(0, (workingArea.Width - widthPixels) / 2);
+        var centeredY = workingArea.Y + Math.Max(0, (workingArea.Height - heightPixels) / 2);
+        Position = new PixelPoint(centeredX, centeredY);
+    }
+
+    void QueuePostLayoutEditorSync() {
+        Dispatcher.UIThread.Post(() => {
+            if (mapEditor?.currentMapDifficulty == null) {
+                return;
+            }
+
+            ApplyEditorLayoutMetrics();
+            RefreshEditorSurface();
+            SetSongPosition(currentSongPositionMilliseconds, updateSlider: true, updateNavWaveform: false);
+        }, DispatcherPriority.Loaded);
     }
 
     public void OpenSettings() {
@@ -144,6 +487,7 @@ public sealed class MainWindow : Window {
 
         PlaybackDeviceId = matchingDevice?.Id;
         PlayingOnDefaultDevice = matchingDevice == null;
+        _ = int.TryParse(userSettings.GetValueForKey(UserSettingsKey.EditorAudioLatency), NumberStyles.Integer, CultureInfo.InvariantCulture, out editorAudioLatency);
 
         suppressControlEvents = true;
         SliderSongVol.Value = GetSettingDouble(UserSettingsKey.DefaultSongVolume, DefaultUserSettings.DefaultSongVolume);
@@ -158,69 +502,122 @@ public sealed class MainWindow : Window {
         var cacheSpectrogram = GetSettingBool(UserSettingsKey.SpectrogramCache, DefaultUserSettings.SpectrogramCache);
         menuItemClearCache.IsVisible = showSpectrogram && cacheSpectrogram;
 
-        ImgWaveformVertical.IsVisible = GetSettingBool(UserSettingsKey.EnableNavWaveform, DefaultUserSettings.EnableNavWaveform);
-        CanvasBookmarks.IsVisible = GetSettingBool(UserSettingsKey.EnableNavBookmarks, DefaultUserSettings.EnableNavBookmarks);
-        CanvasTimingChanges.IsVisible = GetSettingBool(UserSettingsKey.EnableNavBPMChanges, DefaultUserSettings.EnableNavBPMChanges);
-        CanvasNavNotes.IsVisible = GetSettingBool(UserSettingsKey.EnableNavNotes, DefaultUserSettings.EnableNavNotes);
-        DifficultyPrediction.IsVisible = GetSettingBool(UserSettingsKey.DifficultyPredictorShowInMapStats, DefaultUserSettings.DifficultyPredictorShowInMapStats);
+        RefreshEditorDisplayPreferences();
+        RefreshNavigationLayersFromSettings();
+        UpdateDifficultyPrediction();
+        UpdateAudioVolumes();
     }
 
     public void UpdatePlaybackDevice(string? newPlaybackDeviceId, bool isDefaultDevice) {
         PlaybackDeviceId = string.IsNullOrWhiteSpace(newPlaybackDeviceId) ? null : newPlaybackDeviceId;
         PlayingOnDefaultDevice = isDefaultDevice || string.IsNullOrWhiteSpace(newPlaybackDeviceId);
         PauseSong();
+        ReinitializePlaybackDependencies();
     }
 
     public void PauseSong() {
-        songIsPlaying = false;
-        UpdatePlaybackUi();
+        if (songPauseInProgress) {
+            return;
+        }
+
+        songPauseInProgress = true;
+        try {
+            var finalPosition = currentSongPositionMilliseconds;
+            if (songIsPlaying) {
+                finalPosition = playbackStartMilliseconds + (playbackClock.Elapsed.TotalMilliseconds * Math.Max(Audio.MinSongTempo, SliderSongTempo.Value));
+            }
+
+            songPlaybackCancellationTokenSource.Cancel();
+            songPositionTimer.Stop();
+            playbackClock.Stop();
+            songIsPlaying = false;
+            songPlayer?.Pause();
+            noteScanner?.Stop();
+            beatScanner?.Stop();
+            SetSongPosition(finalPosition, updateSlider: true, updateNavWaveform: false);
+            UpdatePlaybackUi();
+            songPreviewController?.EnablePreviewButton();
+        } finally {
+            songPauseInProgress = false;
+        }
     }
 
     public void RestartDrummer() {
-        // Placeholder until the full audio pipeline is migrated.
+        var oldDrummer = drummer;
+        drummer = CreateParallelAudioPlayer(
+            userSettings.GetValueForKey(UserSettingsKey.DrumSampleFile) ?? DefaultUserSettings.DrumSampleFile,
+            Audio.NotePlaybackStreams,
+            userSettings.GetBoolForKey(UserSettingsKey.PanDrumSounds),
+            GetSettingDouble(UserSettingsKey.DefaultNoteVolume, DefaultUserSettings.DefaultNoteVolume)
+        );
+        oldDrummer?.Dispose();
+        drummer?.ChangeVolume(SliderDrumVol.Value);
+
+        if (noteScanner != null) {
+            noteScanner.SetAudioPlayer(drummer);
+        } else {
+            noteScanner = new NoteScanner(new AvaloniaNoteScannerUiAdapter(this), drummer, SliderSongTempo.Value);
+        }
     }
 
     Control BuildRoot() {
         var root = new DockPanel();
-        var menu = BuildMenu();
-        DockPanel.SetDock(menu, Dock.Top);
-        root.Children.Add(menu);
-
-        var body = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("280,*,260"),
-            RowDefinitions = new RowDefinitions("Auto,*"),
+        var topPanel = AutomationHelper.WithAutomationId(new Border {
+            Name = "TopPanel",
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(0, 0, 0, 1),
             Background = new LinearGradientBrush {
                 StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-                EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
                 GradientStops = new GradientStops {
-                    new GradientStop(AvaloniaColor.Parse("#F6F8FC"), 0),
-                    new GradientStop(AvaloniaColor.Parse("#E6ECF8"), 1)
+                    new GradientStop(AvaloniaColor.Parse("#F4F4F4"), 0),
+                    new GradientStop(AvaloniaColor.Parse("#D9D9D9"), 1)
                 }
-            }
+            },
+            Child = BuildMenu()
+        }, "TopPanel");
+        DockPanel.SetDock(topPanel, Dock.Top);
+        root.Children.Add(topPanel);
+
+        var playback = BuildBottomPlaybackPanel();
+        DockPanel.SetDock(playback, Dock.Bottom);
+        root.Children.Add(playback);
+
+        var body = new DockPanel {
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#D7D7DA")),
+            ClipToBounds = true
         };
 
-        leftSidebar = new Border {
-            Padding = new Thickness(18),
-            Background = new SolidColorBrush(AvaloniaColor.Parse("#FFFFFF")),
-            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#C7D2E7")),
-            BorderThickness = new Thickness(0, 0, 1, 0)
-        };
+        leftSidebar = AutomationHelper.WithAutomationId(new Border {
+            Name = "borderLeftDock",
+            Width = SidebarDockWidth,
+            MinWidth = SidebarDockWidth,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#D7D7DA")),
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(0, 0, 1, 0),
+            Padding = new Thickness(4, 0),
+            ClipToBounds = true
+        }, "borderLeftDock");
         leftSidebar.Child = BuildLeftSidebar();
+        DockPanel.SetDock(leftSidebar, Dock.Left);
         body.Children.Add(leftSidebar);
 
-        var centerPanel = BuildCenterPanel();
-        Grid.SetColumn(centerPanel, 1);
-        body.Children.Add(centerPanel);
-
-        rightSidebar = new Border {
-            Padding = new Thickness(18),
-            Background = new SolidColorBrush(AvaloniaColor.Parse("#FFFFFF")),
-            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#C7D2E7")),
-            BorderThickness = new Thickness(1, 0, 0, 0)
-        };
+        rightSidebar = AutomationHelper.WithAutomationId(new Border {
+            Name = "borderRightDock",
+            Width = SidebarDockWidth,
+            MinWidth = SidebarDockWidth,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#D7D7DA")),
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(1, 0, 0, 0),
+            Padding = new Thickness(4, 0),
+            ClipToBounds = true
+        }, "borderRightDock");
         rightSidebar.Child = BuildRightSidebar();
-        Grid.SetColumn(rightSidebar, 2);
+        DockPanel.SetDock(rightSidebar, Dock.Right);
         body.Children.Add(rightSidebar);
+
+        var centerPanel = BuildCenterPanel();
+        body.Children.Add(centerPanel);
 
         root.Children.Add(body);
         return root;
@@ -241,6 +638,14 @@ public sealed class MainWindow : Window {
         menuItemSnapToGrid = BuildMenuItem("Snap Notes to Grid", "MenuItemSnapToGrid", (_, _) => SetSnapToGrid(menuItemSnapToGrid.IsChecked));
         menuItemSnapToGrid.ToggleType = MenuItemToggleType.CheckBox;
         editMenu.Items.Add(menuItemSnapToGrid);
+        var addNewMenu = BuildMenuItem("Add New");
+        addNewMenu.Items.Add(BuildMenuItem("Bookmark", "MenuItemAddBookmark", (_, _) => AddBookmarkAtCurrentPosition()));
+        addNewMenu.Items.Add(BuildMenuItem("Timing Change", "MenuItemAddTimingChange", (_, _) => AddTimingChangeAtCurrentPosition()));
+        addNewMenu.Items.Add(BuildMenuItem("Note (column 1)", "MenuItemAddNoteColumn1", (_, _) => AddNoteAtCurrentPosition(0)));
+        addNewMenu.Items.Add(BuildMenuItem("Note (column 2)", "MenuItemAddNoteColumn2", (_, _) => AddNoteAtCurrentPosition(1)));
+        addNewMenu.Items.Add(BuildMenuItem("Note (column 3)", "MenuItemAddNoteColumn3", (_, _) => AddNoteAtCurrentPosition(2)));
+        addNewMenu.Items.Add(BuildMenuItem("Note (column 4)", "MenuItemAddNoteColumn4", (_, _) => AddNoteAtCurrentPosition(3)));
+        editMenu.Items.Add(addNewMenu);
 
         var viewMenu = BuildMenuItem("View");
         viewMenu.Items.Add(BuildMenuItem("Toggle Left Sidebar", "MenuItemToggleLeftBar", (_, _) => ToggleLeftSidebar()));
@@ -277,15 +682,13 @@ public sealed class MainWindow : Window {
 
     Control BuildLeftSidebar() {
         var panel = new StackPanel {
-            Spacing = 14
+            Spacing = 0,
+            Width = SidebarDockWidth - 8,
+            MinWidth = SidebarDockWidth - 8,
+            MaxWidth = SidebarDockWidth - 8
         };
 
-        panel.Children.Add(new TextBlock {
-            Text = "Map Details",
-            FontSize = 24,
-            FontWeight = FontWeight.Bold,
-            Foreground = new SolidColorBrush(AvaloniaColor.Parse("#002668"))
-        });
+        panel.Children.Add(CreateSectionHeader("Map Settings", "lblMapSettingsHeader", new Thickness(5, 3, 0, 0)));
 
         TxtSongName = CreateTextBox("txtSongName");
         TxtSongName.TextChanged += (_, _) => {
@@ -336,7 +739,7 @@ public sealed class MainWindow : Window {
 
         ComboEnvironment = AutomationHelper.WithAutomationId(new ComboBox {
             Name = "comboEnvironment",
-            MinWidth = 170
+            HorizontalAlignment = HorizontalAlignment.Stretch
         }, "comboEnvironment");
         ComboEnvironment.SelectionChanged += (_, _) => {
             if (suppressControlEvents || mapEditor == null || ComboEnvironment.SelectedItem is not string environment) {
@@ -365,18 +768,25 @@ public sealed class MainWindow : Window {
 
         TxtSongFileName = AutomationHelper.WithAutomationId(new TextBlock {
             Name = "txtSongFileName",
-            TextWrapping = TextWrapping.Wrap
+            Width = 115,
+            FontSize = 11,
+            FontStyle = FontStyle.Italic,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Right,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         }, "txtSongFileName");
 
         TxtCoverFileName = AutomationHelper.WithAutomationId(new TextBlock {
             Name = "txtCoverFileName",
-            TextWrapping = TextWrapping.Wrap
+            Width = 115,
+            FontSize = 11,
+            FontStyle = FontStyle.Italic,
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Right,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         }, "txtCoverFileName");
 
-        BtnPickSong = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnPickSong",
-            Content = "Pick Song"
-        }, "btnPickSong");
+        BtnPickSong = CreateIconButton("btnPickSong", "openMap.png", 20, 20, "Choose song file");
         BtnPickSong.Click += async (_, _) => {
             var selection = await appSession.PickSongFileAsync(this);
             if (!string.IsNullOrWhiteSpace(selection)) {
@@ -384,10 +794,7 @@ public sealed class MainWindow : Window {
             }
         };
 
-        BtnPickCover = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnPickCover",
-            Content = "Pick Cover"
-        }, "btnPickCover");
+        BtnPickCover = CreateIconButton("btnPickCover", "openMap.png", 20, 20, "Choose cover image");
         BtnPickCover.Click += async (_, _) => {
             var selection = await appSession.PickCoverFileAsync(this);
             if (!string.IsNullOrWhiteSpace(selection)) {
@@ -395,59 +802,351 @@ public sealed class MainWindow : Window {
             }
         };
 
-        panel.Children.Add(CreateField("Song Name", TxtSongName));
-        panel.Children.Add(CreateField("Artist", TxtArtistName));
-        panel.Children.Add(CreateField("Mapper", TxtMapperName));
-        panel.Children.Add(CreateField("BPM", TxtSongBpm));
-        panel.Children.Add(CreateField("Environment", ComboEnvironment));
-        panel.Children.Add(CreateField("Explicit", CheckExplicitContent));
-        panel.Children.Add(CreateField("Song File", TxtSongFileName));
-        panel.Children.Add(BtnPickSong);
-        panel.Children.Add(CreateField("Cover File", TxtCoverFileName));
-        panel.Children.Add(BtnPickCover);
+        BtnMakePreview = AutomationHelper.WithAutomationId(new Button {
+            Name = "btnMakePreview",
+            Content = "Create Song Preview",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        }, "btnMakePreview");
+        BtnMakePreview.Click += (_, _) => OpenSongPreviewWindow();
+
+        BtnPlayPreview = CreateIconButton("btnPlayPreview", "playButton.png", 20, 20, "Play preview");
+        BtnPlayPreview.Click += (_, _) => songPreviewController?.TogglePreview();
+
+        ImgCover = AutomationHelper.WithAutomationId(new global::Avalonia.Controls.Image {
+            Name = "imgCover",
+            Width = 175,
+            Height = 175,
+            Stretch = Stretch.UniformToFill
+        }, "imgCover");
+
+        DifficultyPrediction = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "difficultyPrediction",
+            Text = "Difficulty: 0",
+            IsVisible = false,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right
+        }, "difficultyPrediction");
+
+        var songTempoRow = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6
+        };
+        TxtSongBpm.Width = 40;
+        TxtSongBpm.MinWidth = 40;
+        songTempoRow.Children.Add(TxtSongBpm);
+        songTempoRow.Children.Add(AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "lblSongTempoUnit",
+            Text = "BPM",
+            VerticalAlignment = VerticalAlignment.Center
+        }, "lblSongTempoUnit"));
+
+        panel.Children.Add(CreateField("Song Name", TxtSongName, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Artist Name", TxtArtistName, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Mapper Name", TxtMapperName, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Environment", ComboEnvironment, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Song Tempo", songTempoRow, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Explicit Content", CheckExplicitContent, new Thickness(10, 0, 5, 0), labelFontSize: 11.5));
+        panel.Children.Add(CreateSectionDivider());
+        panel.Children.Add(CreateSectionHeader("File Info", "lblFileInfoHeader", new Thickness(5, 5, 0, 0)));
+        panel.Children.Add(CreateFilePickerRow("Song File", TxtSongFileName, BtnPickSong));
+        panel.Children.Add(CreatePreviewActionsRow());
+        panel.Children.Add(CreateFilePickerRow("Image", TxtCoverFileName, BtnPickCover));
+        panel.Children.Add(new Border {
+            Margin = new Thickness(0, 3, 0, 0),
+            Width = 175,
+            Height = 175,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(1),
+            Child = ImgCover
+        });
+        panel.Children.Add(CreateSectionDivider());
+        panel.Children.Add(CreateStatsHeader());
+        panel.Children.Add(BuildStatsPanel());
 
         return new ScrollViewer {
-            Content = panel
+            Content = panel,
+            Width = SidebarDockWidth - 8,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            ClipToBounds = true
         };
     }
 
     Control BuildCenterPanel() {
-        var panel = new Grid {
-            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
-            Margin = new Thickness(20)
+        editorPanel = AutomationHelper.WithAutomationId(new Grid {
+            Name = "EditorPanel",
+            MinWidth = 300,
+            ClipToBounds = true,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#5E80B4")),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto")
+        }, "EditorPanel");
+
+        var backgroundTexture = GetResourceBitmap("waterTexture.png");
+        if (backgroundTexture != null) {
+            var backgroundImage = new global::Avalonia.Controls.Image {
+                Source = backgroundTexture,
+                Stretch = Stretch.Fill,
+                Opacity = 0.4,
+                IsHitTestVisible = false
+            };
+            Grid.SetColumnSpan(backgroundImage, 3);
+            editorPanel.Children.Add(backgroundImage);
+        }
+
+        gridSpectrogram = AutomationHelper.WithAutomationId(new Grid {
+            Name = "gridSpectrogram",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            ColumnDefinitions = new ColumnDefinitions($"100,{SpectrogramResizeGripWidth.ToString(CultureInfo.InvariantCulture)}"),
+            ClipToBounds = true
+        }, "gridSpectrogram");
+        gridSpectrogram.Width = spectrogramPreferredWidth + SpectrogramResizeGripWidth;
+        gridSpectrogram.AddHandler(InputElement.PointerPressedEvent, OnSpectrogramResizePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        gridSpectrogram.AddHandler(InputElement.PointerMovedEvent, OnSpectrogramResizePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        gridSpectrogram.AddHandler(InputElement.PointerReleasedEvent, OnSpectrogramResizePointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        borderSpectrogram = AutomationHelper.WithAutomationId(new Border {
+            Name = "borderSpectrogram",
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#030611")),
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(0, 0, 1, 0)
+        }, "borderSpectrogram");
+        spectrogramCanvas = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "panelSpectrogram",
+            Width = 100,
+            ClipToBounds = true
+        }, "panelSpectrogram");
+        scrollSpectrogram = AutomationHelper.WithAutomationId(new ScrollViewer {
+            Name = "scrollSpectrogram",
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            Content = spectrogramCanvas
+        }, "scrollSpectrogram");
+        scrollSpectrogram.PropertyChanged += OnEditorScrollViewerPropertyChanged;
+        scrollSpectrogram.AddHandler(InputElement.PointerPressedEvent, OnSpectrogramResizePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        scrollSpectrogram.AddHandler(InputElement.PointerMovedEvent, OnSpectrogramResizePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        scrollSpectrogram.AddHandler(InputElement.PointerReleasedEvent, OnSpectrogramResizePointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        borderSpectrogram.Child = scrollSpectrogram;
+        gridSpectrogram.Children.Add(borderSpectrogram);
+        spectrogramResize = AutomationHelper.WithAutomationId(new Button {
+            Name = "spectrogramResize",
+            Width = SpectrogramResizeGripWidth,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#556D6E73")),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Cursor = new Cursor(StandardCursorType.SizeWestEast)
+        }, "spectrogramResize");
+        Grid.SetColumn(spectrogramResize, 1);
+        spectrogramResize.SetValue(Visual.ZIndexProperty, 5);
+        spectrogramResize.AddHandler(InputElement.PointerPressedEvent, OnSpectrogramResizePointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        spectrogramResize.AddHandler(InputElement.PointerMovedEvent, OnSpectrogramResizePointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        spectrogramResize.AddHandler(InputElement.PointerReleasedEvent, OnSpectrogramResizePointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        gridSpectrogram.Children.Add(spectrogramResize);
+        editorPanel.Children.Add(gridSpectrogram);
+
+        editorViewport = new Grid {
+            ClipToBounds = true,
+            MinWidth = EditorSurfaceMinWidth,
+            MaxWidth = EditorSurfaceMaxWidth,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        Grid.SetColumn(editorViewport, 1);
+
+        editorMarginGrid = new Grid {
+            Margin = new Thickness(EditorPanelSideMargin, 0, EditorPanelSideMargin, 0),
+            ClipToBounds = true,
+            IsHitTestVisible = false
+        };
+        for (var columnIndex = 0; columnIndex < 9; columnIndex++) {
+            editorMarginGrid.ColumnDefinitions.Add(new ColumnDefinition(columnIndex % 2 == 0 ? 1 : 3, GridUnitType.Star));
+        }
+
+        editorMarginGrid.Children.Add(new Border {
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#14000000"))
+        });
+        for (var laneIndex = 0; laneIndex < 4; laneIndex++) {
+            var laneShade = new Border {
+                Background = new LinearGradientBrush {
+                    StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                    EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+                    GradientStops = new GradientStops {
+                        new GradientStop(AvaloniaColor.Parse("#05000000"), 0),
+                        new GradientStop(AvaloniaColor.Parse("#42000000"), 1)
+                    }
+                }
+            };
+            Grid.SetColumn(laneShade, laneIndex * 2 + 1);
+            editorMarginGrid.Children.Add(laneShade);
+        }
+        editorViewport.Children.Add(editorMarginGrid);
+        editorMarginGrid.SetValue(Visual.ZIndexProperty, 0);
+
+        drumGrid = new Grid {
+            Margin = new Thickness(EditorPanelSideMargin, 0, EditorPanelSideMargin, 0),
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Height = 120,
+            ClipToBounds = true,
+            IsHitTestVisible = false
+        };
+        for (var columnIndex = 0; columnIndex < 9; columnIndex++) {
+            drumGrid.ColumnDefinitions.Add(new ColumnDefinition(columnIndex % 2 == 0 ? 1 : 3, GridUnitType.Star));
+        }
+
+        lineBeatScan = AutomationHelper.WithAutomationId(new Line {
+            Name = "lineBeatScan",
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(EditorSurfaceDefaultWidth, 0),
+            Stroke = new SolidColorBrush(AvaloniaColor.Parse("#1C255F")),
+            StrokeThickness = 2,
+            VerticalAlignment = VerticalAlignment.Center
+        }, "lineBeatScan");
+        Grid.SetColumnSpan(lineBeatScan, 9);
+        drumGrid.Children.Add(lineBeatScan);
+
+        drum0 = CreateDrumImage("Drum0");
+        drum1 = CreateDrumImage("Drum1");
+        drum2 = CreateDrumImage("Drum2");
+        drum3 = CreateDrumImage("Drum3");
+        AddDrumToLane(drumGrid, drum0, 1);
+        AddDrumToLane(drumGrid, drum1, 3);
+        AddDrumToLane(drumGrid, drum2, 5);
+        AddDrumToLane(drumGrid, drum3, 7);
+        editorViewport.Children.Add(drumGrid);
+        drumGrid.SetValue(Visual.ZIndexProperty, 1);
+
+        var editorSurface = BuildEditorSurface();
+        editorSurface.SetValue(Visual.ZIndexProperty, 2);
+        editorViewport.Children.Add(editorSurface);
+
+        editorPanel.Children.Add(editorViewport);
+
+        borderNavWaveform = AutomationHelper.WithAutomationId(new Border {
+            Name = "borderNavWaveform",
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#24000000")),
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(1, 0, 0, 0)
+        }, "borderNavWaveform");
+        Grid.SetColumn(borderNavWaveform, 2);
+
+        ImgWaveformVertical = AutomationHelper.WithAutomationId(new Button {
+            Name = "imgWaveformVertical",
+            Width = 64,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        }, "imgWaveformVertical");
+        ImgWaveformVertical.AddHandler(InputElement.PointerPressedEvent, OnNavWaveformPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ImgWaveformVertical.AddHandler(InputElement.PointerMovedEvent, OnNavWaveformPointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ImgWaveformVertical.AddHandler(InputElement.PointerReleasedEvent, OnNavWaveformPointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ImgWaveformVertical.AddHandler(InputElement.PointerEnteredEvent, OnNavWaveformPointerEntered, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ImgWaveformVertical.AddHandler(InputElement.PointerExitedEvent, OnNavWaveformPointerExited, RoutingStrategies.Tunnel, handledEventsToo: true);
+
+        navWaveformVisualHost = new Grid {
+            Width = 64,
+            ClipToBounds = true,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#183F8A"))
         };
 
-        var heading = new StackPanel {
-            Spacing = 4
+        var waveformTexture = GetResourceBitmap("waterTextureSmall.png");
+        if (waveformTexture != null) {
+            navWaveformVisualHost.Children.Add(new global::Avalonia.Controls.Image {
+                Source = waveformTexture,
+                Stretch = Stretch.Fill,
+                Opacity = 0.18,
+                IsHitTestVisible = false
+            });
+        }
+
+        navWaveformBackdrop = new Canvas {
+            IsHitTestVisible = false
         };
-        heading.Children.Add(new TextBlock {
-            Text = "Editor",
-            FontSize = 30,
-            FontWeight = FontWeight.Bold,
-            Foreground = new SolidColorBrush(AvaloniaColor.Parse("#002668"))
-        });
-        heading.Children.Add(new TextBlock {
-            Text = "This Avalonia slice now covers the core map management and playback shell while deeper editor behaviors continue to migrate.",
-            TextWrapping = TextWrapping.Wrap
-        });
-        panel.Children.Add(heading);
+        CanvasNavNotes = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasNavNotes",
+            IsHitTestVisible = false
+        }, "canvasNavNotes");
+        CanvasBookmarks = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasBookmarks",
+            IsHitTestVisible = false
+        }, "canvasBookmarks");
+        CanvasTimingChanges = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasTimingChanges",
+            IsHitTestVisible = false
+        }, "canvasTimingChanges");
+        lineSongMouseover = AutomationHelper.WithAutomationId(new Line {
+            Name = "lineSongMouseover",
+            Stroke = Brushes.White,
+            StrokeThickness = 1,
+            Opacity = 0
+        }, "lineSongMouseover");
+        lineSongProgress = AutomationHelper.WithAutomationId(new Line {
+            Name = "lineSongProgress",
+            Stroke = new SolidColorBrush(AvaloniaColor.Parse("#001C70")),
+            StrokeThickness = 1.5
+        }, "lineSongProgress");
+        canvasBookmarkLabels = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasBookmarkLabels",
+            IsHitTestVisible = false
+        }, "canvasBookmarkLabels");
+        canvasTimingChangeLabels = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasTimingChangeLabels",
+            IsHitTestVisible = false
+        }, "canvasTimingChangeLabels");
+        CanvasNavInputBox = AutomationHelper.WithAutomationId(new Canvas {
+            Name = "canvasNavInputBox",
+            Background = Brushes.Transparent
+        }, "canvasNavInputBox");
+
+        navWaveformVisualHost.Children.Add(navWaveformBackdrop);
+        navWaveformVisualHost.Children.Add(CanvasNavNotes);
+        navWaveformVisualHost.Children.Add(lineSongMouseover);
+        navWaveformVisualHost.Children.Add(CanvasBookmarks);
+        navWaveformVisualHost.Children.Add(CanvasTimingChanges);
+        navWaveformVisualHost.Children.Add(lineSongProgress);
+        navWaveformVisualHost.Children.Add(canvasBookmarkLabels);
+        navWaveformVisualHost.Children.Add(canvasTimingChangeLabels);
+        navWaveformVisualHost.Children.Add(CanvasNavInputBox);
+        ImgWaveformVertical.Content = navWaveformVisualHost;
+        borderNavWaveform.Child = ImgWaveformVertical;
+        editorPanel.Children.Add(borderNavWaveform);
+
+        return editorPanel;
+    }
+
+    Control BuildBottomPlaybackPanel() {
+        var border = new Border {
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Background = new LinearGradientBrush {
+                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+                GradientStops = new GradientStops {
+                    new GradientStop(AvaloniaColor.Parse("#F4F4F4"), 0),
+                    new GradientStop(AvaloniaColor.Parse("#D9D9D9"), 1)
+                }
+            }
+        };
 
         var playbackPanel = new Grid {
-            Margin = new Thickness(0, 18, 0, 0),
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto"),
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            ColumnSpacing = 12,
-            RowSpacing = 10
+            Margin = new Thickness(12, 8),
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto")
         };
-        Grid.SetRow(playbackPanel, 1);
 
-        BtnSongPlayer = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnSongPlayer",
-            Content = "Play Song",
-            MinWidth = 120
-        }, "btnSongPlayer");
+        BtnSongPlayer = CreateIconButton("btnSongPlayer", "playButton.png", 30, 30, "Play song");
         BtnSongPlayer.Click += (_, _) => ToggleSongPlayback();
         playbackPanel.Children.Add(BtnSongPlayer);
+
+        TxtSongPosition = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "txtSongPosition",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 12, 0),
+            Text = Helper.TimeFormat(0)
+        }, "txtSongPosition");
+        Grid.SetColumn(TxtSongPosition, 1);
+        playbackPanel.Children.Add(TxtSongPosition);
 
         SliderSongProgress = AutomationHelper.WithAutomationId(new Slider {
             Name = "sliderSongProgress",
@@ -456,44 +1155,188 @@ public sealed class MainWindow : Window {
             Value = 0
         }, "sliderSongProgress");
         SliderSongProgress.PropertyChanged += OnSongProgressSliderPropertyChanged;
-        Grid.SetColumn(SliderSongProgress, 1);
+        Grid.SetColumn(SliderSongProgress, 2);
         playbackPanel.Children.Add(SliderSongProgress);
 
-        TxtSongPosition = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "txtSongPosition",
+        TxtSongDuration = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "txtSongDuration",
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0),
             Text = Helper.TimeFormat(0)
-        }, "txtSongPosition");
-        Grid.SetColumn(TxtSongPosition, 2);
-        playbackPanel.Children.Add(TxtSongPosition);
+        }, "txtSongDuration");
+        Grid.SetColumn(TxtSongDuration, 3);
+        playbackPanel.Children.Add(TxtSongDuration);
 
-        SliderSongTempo = AutomationHelper.WithAutomationId(new Slider {
-            Name = "sliderSongTempo",
-            Minimum = Audio.MinSongTempo,
-            Maximum = Audio.MaxSongTempo,
-            Value = Audio.DefaultSongTempo
-        }, "sliderSongTempo");
-        SliderSongTempo.PropertyChanged += OnSongTempoSliderPropertyChanged;
-        SliderSongTempo.PointerPressed += OnSongTempoSliderPointerPressed;
-        SliderSongTempo.DoubleTapped += OnSongTempoSliderDoubleTapped;
-        Grid.SetRow(SliderSongTempo, 1);
-        Grid.SetColumn(SliderSongTempo, 1);
-        playbackPanel.Children.Add(SliderSongTempo);
+        border.Child = playbackPanel;
+        return border;
+    }
 
-        TxtSongTempo = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "txtSongTempo",
-            VerticalAlignment = VerticalAlignment.Center
-        }, "txtSongTempo");
-        Grid.SetRow(TxtSongTempo, 1);
-        Grid.SetColumn(TxtSongTempo, 2);
-        playbackPanel.Children.Add(TxtSongTempo);
+    Control BuildRightSidebar() {
+        var panel = new StackPanel {
+            Spacing = 0,
+            Width = SidebarDockWidth - 8,
+            MinWidth = SidebarDockWidth - 8,
+            MaxWidth = SidebarDockWidth - 8
+        };
 
-        BtnPlayPreview = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnPlayPreview",
-            Content = "Play Preview"
-        }, "btnPlayPreview");
-        Grid.SetRow(BtnPlayPreview, 1);
-        playbackPanel.Children.Add(BtnPlayPreview);
+        panel.Children.Add(CreateSectionHeader("Difficulty Settings", "lblDifficultySettingsHeader", new Thickness(5, 3, 0, 5)));
+
+        var difficultyButtons = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            Spacing = 0
+        };
+
+        BtnChangeDifficulty0 = BuildDifficultyButton("btnChangeDifficulty0", 0);
+        BtnChangeDifficulty1 = BuildDifficultyButton("btnChangeDifficulty1", 1);
+        BtnChangeDifficulty2 = BuildDifficultyButton("btnChangeDifficulty2", 2);
+        difficultySlot0 = CreateDifficultySlot(BtnChangeDifficulty0, "difficultySlot0");
+        difficultySlot1 = CreateDifficultySlot(BtnChangeDifficulty1, "difficultySlot1");
+        difficultySlot2 = CreateDifficultySlot(BtnChangeDifficulty2, "difficultySlot2");
+        difficultyButtons.Children.Add(difficultySlot0);
+        difficultyButtons.Children.Add(difficultySlot1);
+        difficultyButtons.Children.Add(difficultySlot2);
+
+        var difficultyActions = new StackPanel {
+            Orientation = Orientation.Vertical,
+            Spacing = 0,
+            Margin = new Thickness(5, 0, 0, 0)
+        };
+        BtnAddDifficulty = CreateIconButton("btnAddDifficulty", "Plus.png", 20, 20, "Add difficulty");
+        BtnAddDifficulty.Click += (_, _) => BeginAddDifficulty();
+        BtnDeleteDifficulty = CreateIconButton("btnDeleteDifficulty", "Minus.png", 20, 20, "Delete difficulty");
+        BtnDeleteDifficulty.Click += (_, _) => BeginDeleteDifficulty();
+        difficultyActions.Children.Add(BtnAddDifficulty);
+        difficultyActions.Children.Add(BtnDeleteDifficulty);
+
+        var changeDifficultyPanel = new StackPanel {
+            Orientation = Orientation.Vertical,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(10, 0, 5, 0)
+        };
+        changeDifficultyPanel.Children.Add(CreateSubsectionHeader("Change Difficulty", "lblChangeDifficulty"));
+        var difficultyRow = new Grid {
+            Width = 190,
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto")
+        };
+        difficultyRow.Children.Add(difficultyButtons);
+        Grid.SetColumn(difficultyActions, 1);
+        difficultyRow.Children.Add(difficultyActions);
+        changeDifficultyPanel.Children.Add(difficultyRow);
+        panel.Children.Add(changeDifficultyPanel);
+        panel.Children.Add(CreateSectionDivider(new Thickness(0, 15, 0, 5), 190));
+
+        TxtDifficultyNumber = CreateTextBox("txtDifficultyNumber");
+        TxtDifficultyNumber.Width = 30;
+        TxtDifficultyNumber.MinWidth = 30;
+        TxtDifficultyNumber.LostFocus += (_, _) => CommitDifficultyNumber();
+        TxtDifficultyNumber.KeyDown += OnNumericTextBoxKeyDown;
+
+        TxtNoteSpeed = CreateTextBox("txtNoteSpeed");
+        TxtNoteSpeed.Width = 30;
+        TxtNoteSpeed.MinWidth = 30;
+        TxtNoteSpeed.LostFocus += (_, _) => CommitNoteSpeed();
+        TxtNoteSpeed.KeyDown += OnNumericTextBoxKeyDown;
+
+        TxtDistMedal0 = CreateTextBox("txtDistMedal0");
+        TxtDistMedal0.Width = 50;
+        TxtDistMedal0.MinWidth = 50;
+        TxtDistMedal0.GotFocus += (_, _) => ClearAutoText(TxtDistMedal0);
+        TxtDistMedal0.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal0, RagnarockScoreMedals.Bronze);
+        TxtDistMedal0.KeyDown += OnNumericTextBoxKeyDown;
+
+        TxtDistMedal1 = CreateTextBox("txtDistMedal1");
+        TxtDistMedal1.Width = 50;
+        TxtDistMedal1.MinWidth = 50;
+        TxtDistMedal1.GotFocus += (_, _) => ClearAutoText(TxtDistMedal1);
+        TxtDistMedal1.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal1, RagnarockScoreMedals.Silver);
+        TxtDistMedal1.KeyDown += OnNumericTextBoxKeyDown;
+
+        TxtDistMedal2 = CreateTextBox("txtDistMedal2");
+        TxtDistMedal2.Width = 50;
+        TxtDistMedal2.MinWidth = 50;
+        TxtDistMedal2.GotFocus += (_, _) => ClearAutoText(TxtDistMedal2);
+        TxtDistMedal2.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal2, RagnarockScoreMedals.Gold);
+        TxtDistMedal2.KeyDown += OnNumericTextBoxKeyDown;
+
+        panel.Children.Add(CreateField("Difficulty Level", TxtDifficultyNumber, new Thickness(10, 5, 5, 0)));
+        panel.Children.Add(CreateField("Note Speed", TxtNoteSpeed, new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateSubsectionHeader("Medal Distances", "lblMedalDistances", new Thickness(10, 3, 0, 0), 14));
+        panel.Children.Add(CreateField("Bronze", CreateMeasurementFieldRow(TxtDistMedal0, "lblBronzeDistanceUnit"), new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Silver", CreateMeasurementFieldRow(TxtDistMedal1, "lblSilverDistanceUnit"), new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateField("Gold", CreateMeasurementFieldRow(TxtDistMedal2, "lblGoldDistanceUnit"), new Thickness(10, 0, 5, 0)));
+        panel.Children.Add(CreateSectionDivider());
+        panel.Children.Add(CreateSectionHeader("Editor Settings", "lblEditorSettingsHeader", new Thickness(5, 0, 0, 2)));
+        panel.Children.Add(BuildEditorSettingsPanel());
+
+        LblSelectedBeat = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "lblSelectedBeat",
+            FontSize = 11,
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(5, 4, 0, 0)
+        }, "lblSelectedBeat");
+
+        var dock = new DockPanel {
+            Width = SidebarDockWidth - 8,
+            MinWidth = SidebarDockWidth - 8,
+            MaxWidth = SidebarDockWidth - 8
+        };
+        var selectedBeatFooter = new Border {
+            Height = 25,
+            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Child = LblSelectedBeat
+        };
+        DockPanel.SetDock(selectedBeatFooter, Dock.Bottom);
+        dock.Children.Add(selectedBeatFooter);
+        dock.Children.Add(new ScrollViewer {
+            Content = panel,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            ClipToBounds = true
+        });
+        dock.ClipToBounds = true;
+        return dock;
+    }
+
+    Button BuildDifficultyButton(string automationId, int difficultyIndex) {
+        var button = AutomationHelper.WithAutomationId(new Button {
+            Name = automationId,
+            Width = 55,
+            Height = 40,
+            Padding = new Thickness(0),
+            Content = new Grid {
+                Width = 50,
+                Children = {
+                    CreateResourceImage($"difficulty{difficultyIndex + 1}.png", 32)
+                }
+            }
+        }, automationId);
+        AutomationProperties.SetName(button, $"Difficulty {difficultyIndex + 1}");
+        button.Click += (_, _) => SelectDifficulty(difficultyIndex);
+        return button;
+    }
+
+    static Border CreateDifficultySlot(Button button, string automationId) {
+        return AutomationHelper.WithAutomationId(new Border {
+            Name = automationId,
+            Width = 55,
+            Height = 40,
+            Child = button
+        }, automationId);
+    }
+
+    Control BuildEditorSettingsPanel() {
+        var panel = new StackPanel {
+            Spacing = 0
+        };
+
+        Control CreateSliderValueRow(Slider slider, TextBlock valueText) {
+            var row = new DockPanel();
+            DockPanel.SetDock(valueText, Dock.Right);
+            valueText.Margin = new Thickness(8, 0, 0, 0);
+            row.Children.Add(valueText);
+            row.Children.Add(slider);
+            return row;
+        }
 
         SliderSongVol = AutomationHelper.WithAutomationId(new Slider {
             Name = "sliderSongVol",
@@ -504,26 +1347,17 @@ public sealed class MainWindow : Window {
         SliderSongVol.PropertyChanged += (_, e) => {
             if (e.Property == RangeBase.ValueProperty) {
                 UpdateVolumeTexts();
+                UpdateAudioVolumes();
             }
         };
-        Grid.SetRow(SliderSongVol, 2);
-        Grid.SetColumn(SliderSongVol, 1);
-        playbackPanel.Children.Add(SliderSongVol);
 
         TxtSongVol = AutomationHelper.WithAutomationId(new TextBlock {
             Name = "txtSongVol",
+            Width = 30,
+            MinWidth = 30,
+            TextAlignment = TextAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
         }, "txtSongVol");
-        TxtDrumVol = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "txtDrumVol",
-            VerticalAlignment = VerticalAlignment.Center
-        }, "txtDrumVol");
-        Grid.SetRow(TxtSongVol, 2);
-        Grid.SetColumn(TxtSongVol, 2);
-        playbackPanel.Children.Add(TxtSongVol);
-        Grid.SetRow(TxtDrumVol, 3);
-        Grid.SetColumn(TxtDrumVol, 2);
-        playbackPanel.Children.Add(TxtDrumVol);
 
         SliderDrumVol = AutomationHelper.WithAutomationId(new Slider {
             Name = "sliderDrumVol",
@@ -534,257 +1368,239 @@ public sealed class MainWindow : Window {
         SliderDrumVol.PropertyChanged += (_, e) => {
             if (e.Property == RangeBase.ValueProperty) {
                 UpdateVolumeTexts();
+                UpdateAudioVolumes();
             }
         };
-        Grid.SetRow(SliderDrumVol, 3);
-        Grid.SetColumn(SliderDrumVol, 1);
-        playbackPanel.Children.Add(SliderDrumVol);
 
-        var songVolumeLabel = new TextBlock {
-            Text = "Song Volume",
+        TxtDrumVol = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "txtDrumVol",
+            Width = 30,
+            MinWidth = 30,
+            TextAlignment = TextAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetRow(songVolumeLabel, 2);
-        playbackPanel.Children.Add(songVolumeLabel);
+        }, "txtDrumVol");
 
-        var drumVolumeLabel = new TextBlock {
-            Text = "Drum Volume",
+        SliderSongTempo = AutomationHelper.WithAutomationId(new Slider {
+            Name = "sliderSongTempo",
+            Minimum = Audio.MinSongTempo,
+            Maximum = Audio.MaxSongTempo,
+            Value = Audio.DefaultSongTempo
+        }, "sliderSongTempo");
+        SliderSongTempo.PropertyChanged += OnSongTempoSliderPropertyChanged;
+        SliderSongTempo.PointerPressed += OnSongTempoSliderPointerPressed;
+        SliderSongTempo.DoubleTapped += OnSongTempoSliderDoubleTapped;
+
+        TxtSongTempo = AutomationHelper.WithAutomationId(new TextBlock {
+            Name = "txtSongTempo",
+            Width = 30,
+            MinWidth = 30,
+            TextAlignment = TextAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetRow(drumVolumeLabel, 3);
-        playbackPanel.Children.Add(drumVolumeLabel);
-        panel.Children.Add(playbackPanel);
+        }, "txtSongTempo");
 
-        var workspaceGrid = new Grid {
-            Margin = new Thickness(0, 20, 0, 0),
-            ColumnDefinitions = new ColumnDefinitions("*,120"),
-            ColumnSpacing = 20
-        };
-        Grid.SetRow(workspaceGrid, 2);
-
-        var timelinePanel = new StackPanel {
-            Spacing = 14
-        };
-        LblSelectedBeat = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "lblSelectedBeat",
-            TextWrapping = TextWrapping.Wrap
-        }, "lblSelectedBeat");
-        timelinePanel.Children.Add(LblSelectedBeat);
-
-        CheckMetronome = CreateCheckBox("checkMetronome", (_, _) => { });
-        CheckWaveform = CreateCheckBox("checkWaveform", (_, _) => { });
+        CheckMetronome = CreateCheckBox("checkMetronome", (_, _) => {
+            if (!suppressControlEvents && metronome != null) {
+                metronome.isEnabled = CheckMetronome.IsChecked ?? false;
+            }
+        });
+        CheckWaveform = CreateCheckBox("checkWaveform", (_, _) => RefreshEditorDisplayPreferences());
         CheckGridSnap = CreateCheckBox("checkGridSnap", (_, _) => {
             if (!suppressControlEvents) {
                 SetSnapToGrid(CheckGridSnap.IsChecked ?? false);
             }
         });
+
         TxtGridDivision = CreateTextBox("txtGridDivision");
+        TxtGridDivision.MinWidth = 36;
         TxtGridDivision.LostFocus += (_, _) => CommitGridDivision();
         TxtGridDivision.KeyDown += OnNumericTextBoxKeyDown;
+
         TxtGridSpacing = CreateTextBox("txtGridSpacing");
+        TxtGridSpacing.MinWidth = 36;
         TxtGridSpacing.LostFocus += (_, _) => CommitGridSpacing();
         TxtGridSpacing.KeyDown += OnNumericTextBoxKeyDown;
 
         BtnChangeBPM = AutomationHelper.WithAutomationId(new Button {
             Name = "btnChangeBPM",
-            Content = "Change BPM"
+            Content = "Edit Song Timing",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         }, "btnChangeBPM");
         BtnChangeBPM.Click += (_, _) => OpenChangeBpmWindow();
 
         BtnCustomizeNavBar = AutomationHelper.WithAutomationId(new Button {
             Name = "btnCustomizeNavBar",
-            Content = "Customize Nav Bar"
+            Content = "Customize Navigation Bar",
+            HorizontalAlignment = HorizontalAlignment.Stretch
         }, "btnCustomizeNavBar");
         BtnCustomizeNavBar.Click += (_, _) => OpenCustomizeNavBarWindow();
 
-        BtnMakePreview = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnMakePreview",
-            Content = "Create Preview"
-        }, "btnMakePreview");
-        BtnMakePreview.Click += (_, _) => OpenSongPreviewWindow();
-
-        DifficultyPrediction = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "difficultyPrediction",
-            Text = "Difficulty prediction unavailable in this slice."
-        }, "difficultyPrediction");
-
-        timelinePanel.Children.Add(CreateField("Metronome", CheckMetronome));
-        timelinePanel.Children.Add(CreateField("Waveform", CheckWaveform));
-        timelinePanel.Children.Add(CreateField("Snap To Grid", CheckGridSnap));
-        timelinePanel.Children.Add(CreateField("Grid Division", TxtGridDivision));
-        timelinePanel.Children.Add(CreateField("Grid Spacing", TxtGridSpacing));
-        timelinePanel.Children.Add(BtnChangeBPM);
-        timelinePanel.Children.Add(BtnCustomizeNavBar);
-        timelinePanel.Children.Add(BtnMakePreview);
-        timelinePanel.Children.Add(DifficultyPrediction);
-        workspaceGrid.Children.Add(timelinePanel);
-
-        var navBorder = AutomationHelper.WithAutomationId(new Border {
-            Name = "borderNavWaveform",
-            Padding = new Thickness(12),
-            Background = new SolidColorBrush(AvaloniaColor.Parse("#F0F4FB")),
-            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#C7D2E7")),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10)
-        }, "borderNavWaveform");
-        Grid.SetColumn(navBorder, 1);
-
-        var navPanel = new StackPanel {
-            Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Center
-        };
-
-        ImgWaveformVertical = AutomationHelper.WithAutomationId(new Border {
-            Name = "imgWaveformVertical",
-            Width = 54,
-            Height = 240,
-            Background = new LinearGradientBrush {
-                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-                GradientStops = new GradientStops {
-                    new GradientStop(AvaloniaColor.Parse("#92B3F0"), 0),
-                    new GradientStop(AvaloniaColor.Parse("#18438A"), 1)
-                }
-            },
-            BorderBrush = new SolidColorBrush(AvaloniaColor.Parse("#163768")),
-            BorderThickness = new Thickness(1)
-        }, "imgWaveformVertical");
-        ImgWaveformVertical.PointerPressed += OnNavWaveformPointerPressed;
-        ImgWaveformVertical.PointerMoved += OnNavWaveformPointerMoved;
-        ImgWaveformVertical.PointerReleased += OnNavWaveformPointerReleased;
-        navPanel.Children.Add(ImgWaveformVertical);
-
-        CanvasBookmarks = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "canvasBookmarks",
-            Text = "Bookmarks",
-            FontSize = 11
-        }, "canvasBookmarks");
-        CanvasTimingChanges = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "canvasTimingChanges",
-            Text = "Timing Changes",
-            FontSize = 11
-        }, "canvasTimingChanges");
-        CanvasNavNotes = AutomationHelper.WithAutomationId(new TextBlock {
-            Name = "canvasNavNotes",
-            Text = "Notes",
-            FontSize = 11
-        }, "canvasNavNotes");
-
-        navPanel.Children.Add(CanvasBookmarks);
-        navPanel.Children.Add(CanvasTimingChanges);
-        navPanel.Children.Add(CanvasNavNotes);
-        navBorder.Child = navPanel;
-        workspaceGrid.Children.Add(navBorder);
-
-        panel.Children.Add(workspaceGrid);
-
-        var footerActions = new StackPanel {
+        var gridDivisionRow = new StackPanel {
             Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            Margin = new Thickness(0, 20, 0, 0)
+            Spacing = 4
         };
-        var closeMapButton = new Button {
-            Content = "Close Map"
-        };
-        closeMapButton.Click += (_, _) => BeginCloseMap();
-        footerActions.Children.Add(closeMapButton);
-        Grid.SetRow(footerActions, 3);
-        panel.Children.Add(footerActions);
+        gridDivisionRow.Children.Add(new TextBlock {
+            Text = "1/",
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        gridDivisionRow.Children.Add(TxtGridDivision);
+
+        panel.Children.Add(new Border {
+            Margin = new Thickness(0, 0, 0, 5),
+            Padding = new Thickness(0, 5, 0, 10),
+            Child = new StackPanel {
+                Children = {
+                    BtnChangeBPM,
+                    new Border { Height = 5, Background = Brushes.Transparent },
+                    BtnCustomizeNavBar
+                }
+            }
+        });
+        panel.Children.Add(CreateSubsectionHeader("Playback", "lblPlaybackHeader", new Thickness(5, 0, 0, 5), 14));
+        panel.Children.Add(CreateField("Song Volume", CreateSliderValueRow(SliderSongVol, TxtSongVol), new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Note Volume", CreateSliderValueRow(SliderDrumVol, TxtDrumVol), new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Song Speed", CreateSliderValueRow(SliderSongTempo, TxtSongTempo), new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Metronome", CheckMetronome, new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateSubsectionHeader("Editing Grid", "lblEditingGridHeader", new Thickness(0, 3, 0, 0), 14));
+        panel.Children.Add(CreateField("Snap to Grid", CheckGridSnap, new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Beat Division", gridDivisionRow, new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Grid Spacing", TxtGridSpacing, new Thickness(0, 0, 0, 0)));
+        panel.Children.Add(CreateField("Grid Waveform", CheckWaveform, new Thickness(0, 0, 0, 0), labelFontSize: 11));
 
         return panel;
     }
 
-    Control BuildRightSidebar() {
-        var panel = new StackPanel {
-            Spacing = 14
-        };
-
-        panel.Children.Add(new TextBlock {
-            Text = "Difficulty",
-            FontSize = 24,
+    static TextBlock CreateSectionHeader(string title, string? automationId = null, Thickness? margin = null) {
+        var textBlock = new TextBlock {
+            Text = title,
+            FontSize = 16,
             FontWeight = FontWeight.Bold,
-            Foreground = new SolidColorBrush(AvaloniaColor.Parse("#002668"))
-        });
-
-        var difficultyButtons = new StackPanel {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8
+            Foreground = new SolidColorBrush(AvaloniaColor.Parse("#002668")),
+            Margin = margin ?? default
         };
+        return automationId == null ? textBlock : AutomationHelper.WithAutomationId(textBlock, automationId);
+    }
 
-        BtnChangeDifficulty0 = BuildDifficultyButton("btnChangeDifficulty0", 0);
-        BtnChangeDifficulty1 = BuildDifficultyButton("btnChangeDifficulty1", 1);
-        BtnChangeDifficulty2 = BuildDifficultyButton("btnChangeDifficulty2", 2);
-        difficultyButtons.Children.Add(BtnChangeDifficulty0);
-        difficultyButtons.Children.Add(BtnChangeDifficulty1);
-        difficultyButtons.Children.Add(BtnChangeDifficulty2);
-        panel.Children.Add(difficultyButtons);
-
-        var difficultyActions = new StackPanel {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8
+    static TextBlock CreateSubsectionHeader(string title, string? automationId = null, Thickness? margin = null, double fontSize = 13) {
+        var textBlock = new TextBlock {
+            Text = title,
+            FontSize = fontSize,
+            FontWeight = FontWeight.Bold,
+            Foreground = Brushes.Black,
+            Margin = margin ?? new Thickness(0, 0, 0, 5)
         };
-        BtnAddDifficulty = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnAddDifficulty",
-            Content = "Add"
-        }, "btnAddDifficulty");
-        BtnAddDifficulty.Click += (_, _) => BeginAddDifficulty();
-        BtnDeleteDifficulty = AutomationHelper.WithAutomationId(new Button {
-            Name = "btnDeleteDifficulty",
-            Content = "Delete"
-        }, "btnDeleteDifficulty");
-        BtnDeleteDifficulty.Click += (_, _) => BeginDeleteDifficulty();
-        difficultyActions.Children.Add(BtnAddDifficulty);
-        difficultyActions.Children.Add(BtnDeleteDifficulty);
-        panel.Children.Add(difficultyActions);
+        return automationId == null ? textBlock : AutomationHelper.WithAutomationId(textBlock, automationId);
+    }
 
-        TxtDifficultyNumber = CreateTextBox("txtDifficultyNumber");
-        TxtDifficultyNumber.LostFocus += (_, _) => CommitDifficultyNumber();
-        TxtDifficultyNumber.KeyDown += OnNumericTextBoxKeyDown;
-
-        TxtNoteSpeed = CreateTextBox("txtNoteSpeed");
-        TxtNoteSpeed.LostFocus += (_, _) => CommitNoteSpeed();
-        TxtNoteSpeed.KeyDown += OnNumericTextBoxKeyDown;
-
-        TxtDistMedal0 = CreateTextBox("txtDistMedal0");
-        TxtDistMedal0.GotFocus += (_, _) => ClearAutoText(TxtDistMedal0);
-        TxtDistMedal0.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal0, RagnarockScoreMedals.Bronze);
-        TxtDistMedal0.KeyDown += OnNumericTextBoxKeyDown;
-
-        TxtDistMedal1 = CreateTextBox("txtDistMedal1");
-        TxtDistMedal1.GotFocus += (_, _) => ClearAutoText(TxtDistMedal1);
-        TxtDistMedal1.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal1, RagnarockScoreMedals.Silver);
-        TxtDistMedal1.KeyDown += OnNumericTextBoxKeyDown;
-
-        TxtDistMedal2 = CreateTextBox("txtDistMedal2");
-        TxtDistMedal2.GotFocus += (_, _) => ClearAutoText(TxtDistMedal2);
-        TxtDistMedal2.LostFocus += (_, _) => CommitMedalDistance(TxtDistMedal2, RagnarockScoreMedals.Gold);
-        TxtDistMedal2.KeyDown += OnNumericTextBoxKeyDown;
-
-        panel.Children.Add(CreateField("Difficulty Rank", TxtDifficultyNumber));
-        panel.Children.Add(CreateField("Note Speed", TxtNoteSpeed));
-        panel.Children.Add(CreateField("Bronze Medal", TxtDistMedal0));
-        panel.Children.Add(CreateField("Silver Medal", TxtDistMedal1));
-        panel.Children.Add(CreateField("Gold Medal", TxtDistMedal2));
-
-        return new ScrollViewer {
-            Content = panel
+    static Border CreateSectionDivider(Thickness? margin = null, double? width = null) {
+        return new Border {
+            Height = 1,
+            Width = width ?? double.NaN,
+            HorizontalAlignment = width.HasValue ? HorizontalAlignment.Center : HorizontalAlignment.Stretch,
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#6D6E73")),
+            Margin = margin ?? new Thickness(0, 10, 0, 5)
         };
     }
 
-    Button BuildDifficultyButton(string automationId, int difficultyIndex) {
+    Control CreatePreviewActionsRow() {
+        var row = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnSpacing = 5,
+            Margin = new Thickness(10, 5, 5, 5)
+        };
+        row.Children.Add(BtnMakePreview);
+        Grid.SetColumn(BtnPlayPreview, 1);
+        row.Children.Add(BtnPlayPreview);
+        return row;
+    }
+
+    Control CreateStatsHeader() {
+        var header = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnSpacing = 8
+        };
+        header.Children.Add(CreateSectionHeader("Map Stats", "lblMapStatsHeader", new Thickness(5, 5, 0, 0)));
+        Grid.SetColumn(DifficultyPrediction, 1);
+        header.Children.Add(DifficultyPrediction);
+        return header;
+    }
+
+    Control CreateFilePickerRow(string label, TextBlock fileName, Button actionButton) {
+        var row = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("*,115,Auto"),
+            ColumnSpacing = 8,
+            Margin = new Thickness(10, 0, 5, 0),
+            ClipToBounds = true
+        };
+        row.Children.Add(new TextBlock {
+            Text = label,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
+        });
+        Grid.SetColumn(fileName, 1);
+        row.Children.Add(fileName);
+        Grid.SetColumn(actionButton, 2);
+        row.Children.Add(actionButton);
+        return row;
+    }
+
+    Button CreateIconButton(string automationId, string resourceFileName, double width, double height, string accessibleName) {
         var button = AutomationHelper.WithAutomationId(new Button {
             Name = automationId,
-            Content = (difficultyIndex + 1).ToString(CultureInfo.InvariantCulture),
-            MinWidth = 44
+            Width = width,
+            Height = height,
+            Padding = new Thickness(2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center
         }, automationId);
-        button.Click += (_, _) => SelectDifficulty(difficultyIndex);
+        SetButtonIcon(button, resourceFileName, accessibleName, Math.Max(14, Math.Min(width, height) - 4));
         return button;
+    }
+
+    void SetButtonIcon(Button button, string resourceFileName, string accessibleName, double iconSize) {
+        button.Content = CreateResourceImage(resourceFileName, iconSize);
+        AutomationProperties.SetName(button, accessibleName);
+    }
+
+    global::Avalonia.Controls.Image CreateResourceImage(string resourceFileName, double size) {
+        return new global::Avalonia.Controls.Image {
+            Source = GetResourceBitmap(resourceFileName),
+            Width = size,
+            Height = size,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    Bitmap? GetResourceBitmap(string resourceFileName) {
+        if (resourceBitmapCache.TryGetValue(resourceFileName, out var cachedBitmap)) {
+            return cachedBitmap;
+        }
+
+        var loadedBitmap = TryLoadBitmap(Path.Combine(AppContext.BaseDirectory, "Resources", resourceFileName));
+        resourceBitmapCache[resourceFileName] = loadedBitmap;
+        return loadedBitmap;
+    }
+
+    static Bitmap? TryLoadBitmap(string path) {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) {
+            return null;
+        }
+
+        try {
+            using var stream = File.OpenRead(path);
+            return new Bitmap(stream);
+        } catch {
+            return null;
+        }
     }
 
     TextBox CreateTextBox(string automationId) {
         var textBox = AutomationHelper.WithAutomationId(new TextBox {
             Name = automationId,
-            MinWidth = 160
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinHeight = 24,
+            Padding = new Thickness(4, 2)
         }, automationId);
         textBox.GotFocus += (_, _) => textInputHasFocus = true;
         textBox.LostFocus += (_, _) => textInputHasFocus = false;
@@ -794,28 +1610,64 @@ public sealed class MainWindow : Window {
     CheckBox CreateCheckBox(string automationId, EventHandler<RoutedEventArgs> onChanged) {
         var checkBox = AutomationHelper.WithAutomationId(new CheckBox {
             Name = automationId,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            Focusable = false
         }, automationId);
         checkBox.IsCheckedChanged += onChanged;
         return checkBox;
     }
 
-    static Control CreateField(string label, Control value) {
+    static Control CreateField(string label, Control value, Thickness? margin = null, double? labelFontSize = null) {
         var panel = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("120,*"),
-            ColumnSpacing = 10
+            ColumnDefinitions = new ColumnDefinitions("*,120"),
+            ColumnSpacing = 8,
+            Margin = margin ?? new Thickness(10, 0, 5, 0),
+            ClipToBounds = true
         };
         panel.Children.Add(new TextBlock {
             Text = label,
+            FontSize = labelFontSize ?? 12,
             VerticalAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap
+            TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.CharacterEllipsis
         });
         Grid.SetColumn(value, 1);
         panel.Children.Add(value);
         return panel;
     }
 
+    Control CreateMeasurementFieldRow(TextBox valueBox, string automationId) {
+        var row = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5
+        };
+        row.Children.Add(valueBox);
+        row.Children.Add(AutomationHelper.WithAutomationId(new TextBlock {
+            Name = automationId,
+            Text = "m",
+            Width = 10,
+            VerticalAlignment = VerticalAlignment.Center
+        }, automationId));
+        return row;
+    }
+
+    global::Avalonia.Controls.Image CreateDrumImage(string automationId) {
+        return AutomationHelper.WithAutomationId(new global::Avalonia.Controls.Image {
+            Name = automationId,
+            Source = GetResourceBitmap("drum.png"),
+            Height = 72,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Bottom
+        }, automationId);
+    }
+
+    static void AddDrumToLane(Grid drumGrid, global::Avalonia.Controls.Image drumImage, int column) {
+        Grid.SetColumn(drumImage, column);
+        drumGrid.Children.Add(drumImage);
+    }
+
     void LoadMap(string mapFolder) {
+        PauseSong();
         mapEditor?.Dispose();
         mapEditor = new MapEditor(mapEditorUiAdapter, mapFolder, makeNewMap: false);
         mapEditor.SelectDifficulty(0);
@@ -833,14 +1685,23 @@ public sealed class MainWindow : Window {
         TxtSongFileName.Text = GetMapString("_songFilename");
         TxtCoverFileName.Text = FormatCoverFileName(GetMapString("_coverImageFilename"));
         LoadDifficultyIntoControls(0);
+        UpdateCoverPreview();
 
-        currentSongDurationSeconds = Math.Max(1, GetMapDouble("_songApproximativeDuration"));
+        LoadSongAudio();
+        mapEditor.GlobalBPM = GetMapDouble("_beatsPerMinute");
+        mapEditor.SongDuration = currentSongDurationSeconds;
         SliderSongProgress.Maximum = currentSongDurationSeconds * 1000;
         SetSongPosition(0, updateSlider: true, updateNavWaveform: false);
 
         suppressControlEvents = false;
         RefreshDifficultyButtons();
+        RefreshEditorSurface();
+        QueuePostLayoutEditorSync();
         mapEditor.needsSave = mapDirtyState;
+        UpdateDifficultyPrediction();
+        songPreviewController?.Restart(mapEditor, songIsPlaying);
+        RestartDrummer();
+        RestartMetronome();
     }
 
     void PopulateEnvironmentOptions() {
@@ -860,9 +1721,12 @@ public sealed class MainWindow : Window {
         TxtNoteSpeed.Text = GetMapString("_noteJumpMovementSpeed", (RagnarockMapDifficulties)difficultyIndex);
         TxtGridSpacing.Text = GetMapString("_editorGridSpacing", (RagnarockMapDifficulties)difficultyIndex, custom: true);
         TxtGridDivision.Text = GetMapString("_editorGridDivision", (RagnarockMapDifficulties)difficultyIndex, custom: true);
+        mapEditor.defaultGridDivision = CurrentGridDivision;
         TxtDistMedal0.Text = FormatMedalDistance(mapEditor.GetMedalDistance(RagnarockScoreMedals.Bronze, (RagnarockMapDifficulties)difficultyIndex));
         TxtDistMedal1.Text = FormatMedalDistance(mapEditor.GetMedalDistance(RagnarockScoreMedals.Silver, (RagnarockMapDifficulties)difficultyIndex));
         TxtDistMedal2.Text = FormatMedalDistance(mapEditor.GetMedalDistance(RagnarockScoreMedals.Gold, (RagnarockMapDifficulties)difficultyIndex));
+        RefreshEditorSurface();
+        UpdateDifficultyPrediction();
     }
 
     void RefreshDifficultyButtons() {
@@ -871,29 +1735,72 @@ public sealed class MainWindow : Window {
         }
 
         var count = mapEditor.numDifficulties;
-        BtnChangeDifficulty0.IsVisible = count > 0;
-        BtnChangeDifficulty1.IsVisible = count > 1;
-        BtnChangeDifficulty2.IsVisible = count > 2;
+        var difficultyButtons = new[] {
+            BtnChangeDifficulty0,
+            BtnChangeDifficulty1,
+            BtnChangeDifficulty2
+        };
+        for (var difficultyIndex = 0; difficultyIndex < difficultyButtons.Length; difficultyIndex++) {
+            var button = difficultyButtons[difficultyIndex];
+            var isAvailable = difficultyIndex < count;
+            button.IsVisible = isAvailable;
+            button.Opacity = 1;
+            button.IsHitTestVisible = !songIsPlaying && isAvailable;
+            button.IsEnabled = !songIsPlaying && isAvailable;
+            button.Focusable = button.IsEnabled;
+        }
 
         BtnAddDifficulty.IsEnabled = !songIsPlaying && count < 3;
+        BtnAddDifficulty.Focusable = BtnAddDifficulty.IsEnabled;
         BtnDeleteDifficulty.IsEnabled = !songIsPlaying && count > 1;
+        BtnDeleteDifficulty.Focusable = BtnDeleteDifficulty.IsEnabled;
     }
 
     void ToggleSongPlayback() {
-        songIsPlaying = !songIsPlaying;
-        UpdatePlaybackUi();
+        if (songIsPlaying) {
+            PauseSong();
+            return;
+        }
+
+        PlaySong();
     }
 
     void UpdatePlaybackUi() {
-        BtnSongPlayer.Content = songIsPlaying ? "Pause Song" : "Play Song";
+        SetButtonIcon(BtnSongPlayer, songIsPlaying ? "pauseButton.png" : "playButton.png", songIsPlaying ? "Pause song" : "Play song", 18);
+        TxtSongBpm.IsEnabled = !songIsPlaying;
+        BtnChangeBPM.IsEnabled = !songIsPlaying;
         SliderSongTempo.IsEnabled = !songIsPlaying;
+        SliderSongTempo.Focusable = !songIsPlaying;
         SliderSongProgress.IsEnabled = !songIsPlaying;
-        BtnAddDifficulty.IsEnabled = !songIsPlaying && mapEditor is { numDifficulties: < 3 };
-        BtnDeleteDifficulty.IsEnabled = !songIsPlaying && mapEditor is { numDifficulties: > 1 };
-        BtnChangeDifficulty0.IsEnabled = !songIsPlaying;
-        BtnChangeDifficulty1.IsEnabled = !songIsPlaying;
-        BtnChangeDifficulty2.IsEnabled = !songIsPlaying;
+        SliderSongProgress.Focusable = !songIsPlaying;
+        if (mapEditor != null) {
+            RefreshDifficultyButtons();
+        } else {
+            BtnAddDifficulty.IsEnabled = false;
+            BtnAddDifficulty.Focusable = false;
+            BtnDeleteDifficulty.IsEnabled = false;
+            BtnDeleteDifficulty.Focusable = false;
+            BtnChangeDifficulty0.IsEnabled = false;
+            BtnChangeDifficulty0.Focusable = false;
+            BtnChangeDifficulty1.IsEnabled = false;
+            BtnChangeDifficulty1.Focusable = false;
+            BtnChangeDifficulty2.IsEnabled = false;
+            BtnChangeDifficulty2.Focusable = false;
+        }
         BtnPlayPreview.IsEnabled = !songIsPlaying;
+        BtnPlayPreview.Focusable = BtnPlayPreview.IsEnabled;
+        BtnCustomizeNavBar.IsEnabled = !songIsPlaying;
+        BtnCustomizeNavBar.Focusable = BtnCustomizeNavBar.IsEnabled;
+        BtnMakePreview.IsEnabled = !songIsPlaying;
+        BtnMakePreview.Focusable = BtnMakePreview.IsEnabled;
+        if (scrollEditor != null) {
+            scrollEditor.IsEnabled = true;
+            scrollEditor.IsHitTestVisible = !songIsPlaying;
+            scrollEditor.Focusable = !songIsPlaying;
+        }
+        if (songIsPlaying) {
+            HideEditorHoverVisuals();
+        }
     }
 
     void OnSongProgressSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
@@ -904,6 +1811,11 @@ public sealed class MainWindow : Window {
 
     void OnSongTempoSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
         if (e.Property == RangeBase.ValueProperty) {
+            if (songTempoStream != null) {
+                songTempoStream.Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo);
+            }
+            noteScanner?.SetTempo(SliderSongTempo.Value);
+            beatScanner?.SetTempo(SliderSongTempo.Value);
             UpdateSongTempoText();
         }
     }
@@ -936,9 +1848,17 @@ public sealed class MainWindow : Window {
         TxtDrumVol.Text = $"{Math.Round(SliderDrumVol.Value * 100):0}%";
     }
 
-    void SetSongPosition(double milliseconds, bool updateSlider = true, bool updateNavWaveform = true) {
+    void SetSongPosition(double milliseconds, bool updateSlider = true, bool updateNavWaveform = true, bool updateEditorScroll = true) {
         var clamped = Math.Max(0, Math.Min(SliderSongProgress.Maximum, milliseconds));
         currentSongPositionMilliseconds = clamped;
+
+        if (!songIsPlaying && songStream != null) {
+            try {
+                songStream.CurrentTime = TimeSpan.FromMilliseconds(clamped);
+            } catch {
+                songStream.CurrentTime = TimeSpan.Zero;
+            }
+        }
 
         suppressControlEvents = true;
         if (updateSlider) {
@@ -951,36 +1871,53 @@ public sealed class MainWindow : Window {
         var bpm = Math.Max(1, GetMapDouble("_beatsPerMinute"));
         var beat = seconds * bpm / 60.0;
         LblSelectedBeat.Text = $"Time: {Helper.TimeFormat(seconds)} | Global Beat: {beat:0.##}";
+        RefreshSongProgressIndicator();
+        if (updateEditorScroll) {
+            SyncEditorScrollToCurrentBeat();
+        }
     }
 
     void OnNavWaveformPointerPressed(object? sender, PointerPressedEventArgs e) {
-        if (!e.GetCurrentPoint(ImgWaveformVertical).Properties.IsLeftButtonPressed) {
-            return;
-        }
-
         navWaveformDragging = true;
         e.Pointer.Capture(ImgWaveformVertical);
+        RefreshSongMouseoverIndicator(e.GetPosition(ImgWaveformVertical).Y, isVisible: true);
         UpdateSongPositionFromNavWaveform(e);
+        e.Handled = true;
     }
 
     void OnNavWaveformPointerMoved(object? sender, PointerEventArgs e) {
-        if (!navWaveformDragging || !e.GetCurrentPoint(ImgWaveformVertical).Properties.IsLeftButtonPressed) {
+        RefreshSongMouseoverIndicator(e.GetPosition(ImgWaveformVertical).Y, isVisible: true);
+        if (!navWaveformDragging) {
             return;
         }
 
         UpdateSongPositionFromNavWaveform(e);
+        e.Handled = true;
     }
 
     void OnNavWaveformPointerReleased(object? sender, PointerReleasedEventArgs e) {
+        if (!navWaveformDragging) {
+            return;
+        }
+
         navWaveformDragging = false;
         e.Pointer.Capture(null);
+        e.Handled = true;
+    }
+
+    void OnNavWaveformPointerEntered(object? sender, PointerEventArgs e) {
+        RefreshSongMouseoverIndicator(e.GetPosition(ImgWaveformVertical).Y, isVisible: true);
+    }
+
+    void OnNavWaveformPointerExited(object? sender, PointerEventArgs e) {
+        RefreshSongMouseoverIndicator(0, isVisible: false);
     }
 
     void UpdateSongPositionFromNavWaveform(PointerEventArgs e) {
         var position = e.GetPosition(ImgWaveformVertical);
         var ratio = ImgWaveformVertical.Bounds.Height <= 0
             ? 0
-            : Math.Clamp(position.Y / ImgWaveformVertical.Bounds.Height, 0, 1);
+            : 1 - Math.Clamp(position.Y / ImgWaveformVertical.Bounds.Height, 0, 1);
         SetSongPosition(ratio * SliderSongProgress.Maximum, updateSlider: true, updateNavWaveform: false);
     }
 
@@ -1041,6 +1978,7 @@ public sealed class MainWindow : Window {
         LoadDifficultyIntoControls(difficultyIndex);
         suppressControlEvents = false;
         RefreshDifficultyButtons();
+        UpdateDifficultyPrediction();
     }
 
     void CommitSongBpm() {
@@ -1075,6 +2013,7 @@ public sealed class MainWindow : Window {
                     mapEditor.RetimeNotesAndMarkers(bpm, previousBpm);
                 }
 
+                mapEditor.GlobalBPM = bpm;
                 mapEditor.SetMapValue("_beatsPerMinute", JToken.FromObject(bpm));
                 TxtSongBpm.Text = FormatNumber(bpm);
                 SetSongPosition(currentSongPositionMilliseconds, updateSlider: true, updateNavWaveform: false);
@@ -1103,21 +2042,38 @@ public sealed class MainWindow : Window {
     }
 
     void CommitGridSpacing() {
+        var previousSpacing = GetMapDouble("_editorGridSpacing", RagnarockMapDifficulties.Current, custom: true);
         CommitValidatedDouble(
             TxtGridSpacing,
-            () => GetMapDouble("_editorGridSpacing", RagnarockMapDifficulties.Current, custom: true),
+            () => previousSpacing,
             _ => true,
-            value => mapEditor?.SetMapValue("_editorGridSpacing", JToken.FromObject(value), RagnarockMapDifficulties.Current, custom: true),
+            value => {
+                mapEditor?.SetMapValue("_editorGridSpacing", JToken.FromObject(value), RagnarockMapDifficulties.Current, custom: true);
+                if (Math.Abs(value - previousSpacing) >= 0.0001) {
+                    RefreshEditorSurface();
+                }
+            },
             "The grid spacing must be numerical."
         );
     }
 
     void CommitGridDivision() {
+        var previousDivision = GetMapInt("_editorGridDivision", RagnarockMapDifficulties.Current, custom: true);
         CommitValidatedInteger(
             TxtGridDivision,
-            () => GetMapInt("_editorGridDivision", RagnarockMapDifficulties.Current, custom: true),
+            () => previousDivision,
             value => value >= 1 && value <= Editor.GridDivisionMax,
-            value => mapEditor?.SetMapValue("_editorGridDivision", JToken.FromObject(value), RagnarockMapDifficulties.Current, custom: true),
+            value => {
+                if (mapEditor == null) {
+                    return;
+                }
+
+                mapEditor.defaultGridDivision = value;
+                mapEditor.SetMapValue("_editorGridDivision", JToken.FromObject(value), RagnarockMapDifficulties.Current, custom: true);
+                if (value != previousDivision) {
+                    RefreshEditorSurface();
+                }
+            },
             $"The grid division amount must be an integer from 1 to {Editor.GridDivisionMax}."
         );
     }
@@ -1395,24 +2351,41 @@ public sealed class MainWindow : Window {
         var previousSongPath = Path.Combine(mapEditor.mapFolder, GetMapString("_songFilename"));
 
         if (!string.Equals(Path.GetFullPath(selectedSongPath), Path.GetFullPath(previousSongPath), StringComparison.OrdinalIgnoreCase)) {
+            PauseSong();
+            UnloadSongAudio();
+
             if (!string.Equals(Path.GetFullPath(selectedSongPath), Path.GetFullPath(destinationPath), StringComparison.OrdinalIgnoreCase)) {
-                Helper.FileDeleteIfExists(destinationPath);
+                RetryDeleteFile(destinationPath);
                 File.Copy(selectedSongPath, destinationPath, overwrite: true);
             }
 
             if (!string.Equals(previousSongPath, destinationPath, StringComparison.OrdinalIgnoreCase)) {
-                Helper.FileDeleteIfExists(previousSongPath);
+                RetryDeleteFile(previousSongPath);
             }
         }
 
         mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject((int)vorbisStream.TotalTime.TotalSeconds + 1));
         mapEditor.SetMapValue("_songFilename", JToken.FromObject(songFileName));
         mapEditor.SaveMap();
-
-        currentSongDurationSeconds = Math.Max(1, (int)vorbisStream.TotalTime.TotalSeconds + 1);
-        SliderSongProgress.Maximum = currentSongDurationSeconds * 1000;
+        LoadSongAudio();
+        mapEditor.SongDuration = currentSongDurationSeconds;
         TxtSongFileName.Text = songFileName;
         SetSongPosition(0, updateSlider: true, updateNavWaveform: false);
+        RefreshEditorSurface();
+        songPreviewController?.Restart(mapEditor, songIsPlaying);
+    }
+
+    static void RetryDeleteFile(string path) {
+        for (var attempt = 0; ; attempt++) {
+            try {
+                Helper.FileDeleteIfExists(path);
+                return;
+            } catch (IOException) when (attempt < 39) {
+                Thread.Sleep(50);
+            } catch (UnauthorizedAccessException) when (attempt < 39) {
+                Thread.Sleep(50);
+            }
+        }
     }
 
     void ReplaceCover(string selectedCoverPath) {
@@ -1440,6 +2413,7 @@ public sealed class MainWindow : Window {
         mapEditor.SetMapValue("_coverImageFilename", JToken.FromObject(newFileName));
         mapEditor.SaveMap();
         TxtCoverFileName.Text = newFileName;
+        UpdateCoverPreview();
     }
 
     void ClearSongCache() {
@@ -1454,27 +2428,27 @@ public sealed class MainWindow : Window {
     }
 
     void OpenBpmFinderWindow() {
-        ShowToolWindow(() => bpmFinderWindow, window => bpmFinderWindow = window, () => CreateSentinelWindow("BPM Finder", "lblAvgBPM", "Average BPM"));
+        ShowToolWindow(() => bpmFinderWindow, window => bpmFinderWindow = window, () => new BpmCalcWindow());
     }
 
     void OpenDifficultyPredictorWindow() {
-        ShowToolWindow(() => predictorWindow, window => predictorWindow = window, () => CreateSentinelWindow("Difficulty Predictor", "btnPredict", "Predict", useButtonSentinel: true));
+        ShowToolWindow(() => predictorWindow, window => predictorWindow = window, () => new DifficultyPredictorWindow(this));
     }
 
     void OpenAboutWindow() {
-        ShowToolWindow(() => aboutWindow, window => aboutWindow = window, () => CreateSentinelWindow("About Edda", "TxtGithubLink", EddaProgram.RepositoryURL));
+        ShowToolWindow(() => aboutWindow, window => aboutWindow = window, () => new AboutWindow());
     }
 
     void OpenChangeBpmWindow() {
-        ShowToolWindow(() => changeBpmWindow, window => changeBpmWindow = window, () => CreateSentinelWindow("Change BPM", "dataBPMChange", "BPM Changes"));
+        ShowToolWindow(() => changeBpmWindow, window => changeBpmWindow = window, () => new ChangeBpmWindow(this));
     }
 
     void OpenCustomizeNavBarWindow() {
-        ShowToolWindow(() => customizeNavBarWindow, window => customizeNavBarWindow = window, () => CreateSentinelWindow("Customize Nav Bar", "ColorWaveform", "Waveform Color"));
+        ShowToolWindow(() => customizeNavBarWindow, window => customizeNavBarWindow = window, () => new CustomizeNavBarWindow(this));
     }
 
     void OpenSongPreviewWindow() {
-        ShowToolWindow(() => songPreviewWindow, window => songPreviewWindow = window, () => CreateSentinelWindow("Song Preview", "btnGenerate", "Generate", useButtonSentinel: true));
+        ShowToolWindow(() => songPreviewWindow, window => songPreviewWindow = window, () => new SongPreviewWindow(this));
     }
 
     void ShowToolWindow(Func<Window?> getter, Action<Window?> setter, Func<Window> factory) {
@@ -1485,6 +2459,7 @@ public sealed class MainWindow : Window {
         }
 
         var window = factory();
+        window.Topmost = true;
         setter(window);
         window.Closed += (_, _) => {
             if (ReferenceEquals(getter(), window)) {
@@ -1494,31 +2469,327 @@ public sealed class MainWindow : Window {
         window.Show(this);
     }
 
-    static Window CreateSentinelWindow(string title, string sentinelId, string sentinelText, bool useButtonSentinel = false) {
-        var window = new Window {
-            Title = title,
-            Width = 360,
-            Height = 220,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner
-        };
+    void DisposeWindowResources() {
+        songPositionTimer.Stop();
+        songPreviewController?.Dispose();
+        songPreviewController = null;
+        PauseSong();
+        noteScanner?.Dispose();
+        noteScanner = null;
+        beatScanner?.Dispose();
+        beatScanner = null;
+        drummer?.Dispose();
+        drummer = null;
+        metronome?.Dispose();
+        metronome = null;
+        UnloadSongAudio();
+        InvalidateEditorAudioVisuals(clearVisuals: true);
 
-        AutomationHelper.SetAutomationId(window, $"Window{sentinelId}");
-        window.Content = useButtonSentinel
-            ? AutomationHelper.WithAutomationId(new Button {
-                Name = sentinelId,
-                Content = sentinelText,
-                Margin = new Thickness(24)
-            }, sentinelId)
-            : AutomationHelper.WithAutomationId(new TextBlock {
-                Name = sentinelId,
-                Text = sentinelText,
-                Margin = new Thickness(24),
-                TextWrapping = TextWrapping.Wrap
-            }, sentinelId);
-        return window;
+        if (deviceEnumerator != null && deviceChangeListener != null) {
+            deviceEnumerator.UnregisterEndpointNotificationCallback(deviceChangeListener);
+        }
+        deviceChangeListener?.Dispose();
+        deviceChangeListener = null;
+        deviceEnumerator?.Dispose();
+        deviceEnumerator = null;
+        songPlaybackCancellationTokenSource.Dispose();
+        coverPreviewBitmap?.Dispose();
+        coverPreviewBitmap = null;
+        foreach (var bitmap in resourceBitmapCache.Values) {
+            bitmap?.Dispose();
+        }
+        resourceBitmapCache.Clear();
+        mapEditor?.Dispose();
+    }
+
+    IReadOnlyList<PlaybackDeviceOption> ResolvePlaybackDevices() {
+        if (deviceEnumerator == null) {
+            return [];
+        }
+
+        try {
+            return deviceEnumerator
+                .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                .Select(device => new PlaybackDeviceOption(device.ID, device.FriendlyName))
+                .ToList();
+        } catch {
+            return [];
+        }
+    }
+
+    MMDevice? GetPlaybackDevice() {
+        if (!OperatingSystem.IsWindows() || deviceEnumerator == null) {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(PlaybackDeviceId)) {
+            try {
+                var preferredDevice = deviceEnumerator.GetDevice(PlaybackDeviceId);
+                if (preferredDevice.State.HasFlag(DeviceState.Active)) {
+                    return preferredDevice;
+                }
+            } catch {
+            }
+        }
+
+        try {
+            return deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        } catch {
+            return null;
+        }
+    }
+
+    void LoadSongAudio() {
+        UnloadSongAudio();
+        InvalidateEditorAudioVisuals(clearVisuals: true);
+
+        var songPath = CurrentSongPath;
+        currentSongDurationSeconds = ResolveSongDurationSeconds();
+        UpdateSongDurationText();
+        if (string.IsNullOrWhiteSpace(songPath) || !File.Exists(songPath) || !OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        songStream = new VorbisWaveReader(songPath);
+        songTempoStream = new SoundTouchWaveStream(songStream) {
+            Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo)
+        };
+        songChannel = new SampleChannel(songTempoStream) {
+            Volume = (float)Math.Clamp(SliderSongVol.Value, 0, 1)
+        };
+        currentSongDurationSeconds = Math.Max(1, (int)songStream.TotalTime.TotalSeconds + 1);
+        if (mapEditor != null && (int)GetMapDouble("_songApproximativeDuration") != (int)currentSongDurationSeconds) {
+            mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject((int)currentSongDurationSeconds));
+        }
+        UpdateSongDurationText();
+
+        SliderSongProgress.Minimum = 0;
+        SliderSongProgress.Maximum = songStream.TotalTime.TotalSeconds * 1000;
+        InitSongPlayer();
+        InvalidateEditorAudioVisuals();
+    }
+
+    void InitSongPlayer() {
+        var oldSongPlayer = songPlayer;
+        songPlayer = null;
+        oldSongPlayer?.Stop();
+        oldSongPlayer?.Dispose();
+
+        var device = GetPlaybackDevice();
+        if (device == null || songChannel == null) {
+            return;
+        }
+
+        songPlayer = new WasapiOut(device, AudioClientShareMode.Shared, true, Audio.WASAPILatencyTarget);
+        songPlayer.Init(songChannel);
+    }
+
+    void UnloadSongAudio() {
+        var oldSongPlayer = songPlayer;
+        songPlayer = null;
+        oldSongPlayer?.Stop();
+        oldSongPlayer?.Dispose();
+
+        songChannel = null;
+
+        songTempoStream?.Dispose();
+        songTempoStream = null;
+
+        songStream?.Dispose();
+        songStream = null;
+        InvalidateEditorAudioVisuals(clearVisuals: true);
+    }
+
+    void PlaySong() {
+        if (songStream == null || songTempoStream == null || songChannel == null) {
+            return;
+        }
+
+        if (Helper.DoubleApproxGreaterEqual(SliderSongProgress.Value, songStream.TotalTime.TotalMilliseconds)) {
+            return;
+        }
+
+        try {
+            songStream.CurrentTime = TimeSpan.FromMilliseconds(SliderSongProgress.Value);
+        } catch {
+            songStream.CurrentTime = TimeSpan.Zero;
+        }
+
+        songTempoStream.Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo);
+        playbackStartMilliseconds = SliderSongProgress.Value;
+        playbackClock.Restart();
+        songIsPlaying = true;
+        UpdatePlaybackUi();
+        songPreviewController?.StopPreview();
+        songPreviewController?.DisablePreviewButton();
+
+        if (metronome != null) {
+            metronome.isEnabled = CheckMetronome.IsChecked ?? false;
+        }
+
+        noteScanner?.Stop();
+        beatScanner?.Stop();
+        noteScanner = new NoteScanner(new AvaloniaNoteScannerUiAdapter(this), drummer, SliderSongTempo.Value);
+        beatScanner = new BeatScanner(metronome, SliderSongTempo.Value);
+        if (mapEditor?.currentMapDifficulty != null) {
+            noteScanner.Start((int)(SliderSongProgress.Value - editorAudioLatency), new List<Note>(mapEditor.currentMapDifficulty.notes), CurrentGlobalBpm);
+            beatScanner.Start((int)(SliderSongProgress.Value - editorAudioLatency), BuildPlaybackBeatMarkers(), CurrentGlobalBpm);
+        }
+
+        var previousTokenSource = songPlaybackCancellationTokenSource;
+        songPlaybackCancellationTokenSource = new CancellationTokenSource();
+        previousTokenSource.Dispose();
+
+        if (editorAudioLatency == 0 || songTempoStream.CurrentTime > TimeSpan.FromMilliseconds(editorAudioLatency)) {
+            songTempoStream.CurrentTime -= TimeSpan.FromMilliseconds(editorAudioLatency);
+            songPlayer?.Play();
+        } else {
+            songTempoStream.CurrentTime = TimeSpan.Zero;
+            Task.Delay(TimeSpan.FromMilliseconds(editorAudioLatency)).ContinueWith(_ => {
+                if (!songPlaybackCancellationTokenSource.IsCancellationRequested) {
+                    songPlayer?.Play();
+                }
+            }, songPlaybackCancellationTokenSource.Token);
+        }
+
+        songPositionTimer.Start();
+    }
+
+    void UpdatePlaybackPositionFromAudio() {
+        if (!songIsPlaying || songPauseInProgress) {
+            return;
+        }
+
+        var milliseconds = playbackStartMilliseconds + (playbackClock.Elapsed.TotalMilliseconds * Math.Max(Audio.MinSongTempo, SliderSongTempo.Value));
+        SetSongPosition(milliseconds, updateSlider: true, updateNavWaveform: false);
+        if (milliseconds >= SliderSongProgress.Maximum - 10) {
+            SetSongPosition(SliderSongProgress.Maximum, updateSlider: true, updateNavWaveform: false);
+            PauseSong();
+        }
+    }
+
+    void UpdateAudioVolumes() {
+        if (songChannel != null) {
+            songChannel.Volume = (float)Math.Clamp(SliderSongVol.Value, 0, 1);
+        }
+
+        songPreviewController?.UpdateVolume();
+        drummer?.ChangeVolume(SliderDrumVol.Value);
+        metronome?.ChangeVolume(SliderDrumVol.Value);
+    }
+
+    void ReinitializePlaybackDependencies() {
+        playbackDevices.Clear();
+        playbackDevices.AddRange(ResolvePlaybackDevices());
+        InitSongPlayer();
+        if (mapEditor != null) {
+            songPreviewController?.Restart(mapEditor, songIsPlaying);
+        }
+        RestartDrummer();
+        RestartMetronome();
+    }
+
+    void RestartMetronome() {
+        var oldMetronome = metronome;
+        metronome = CreateParallelAudioPlayer(
+            Audio.MetronomeFilename,
+            Audio.MetronomeStreams,
+            isPanned: false,
+            GetSettingDouble(UserSettingsKey.DefaultNoteVolume, DefaultUserSettings.DefaultNoteVolume),
+            isEnabled: CheckMetronome.IsChecked ?? false
+        );
+        oldMetronome?.Dispose();
+        metronome?.ChangeVolume(SliderDrumVol.Value);
+
+        if (beatScanner != null) {
+            beatScanner.SetAudioPlayer(metronome);
+        } else {
+            beatScanner = new BeatScanner(metronome, SliderSongTempo.Value);
+        }
+    }
+
+    ParallelAudioPlayer? CreateParallelAudioPlayer(string basePath, int streams, bool isPanned, double defaultVolume, bool isEnabled = true) {
+        var device = GetPlaybackDevice();
+        if (device == null || !OperatingSystem.IsWindows()) {
+            return null;
+        }
+
+        try {
+            return new ParallelAudioPlayer(
+                device,
+                basePath,
+                streams,
+                Audio.WASAPILatencyTarget,
+                isEnabled,
+                isPanned,
+                (float)Math.Clamp(defaultVolume, 0, 1)
+            );
+        } catch {
+            return null;
+        }
+    }
+
+    List<double> BuildPlaybackBeatMarkers() {
+        var totalBeats = Math.Max(GetCurrentSongBeat(), currentSongDurationSeconds * Math.Max(1, CurrentGlobalBpm) / 60.0);
+        var beats = new List<double>();
+        for (var beat = 0.0; beat <= totalBeats; beat += 1.0) {
+            beats.Add(beat);
+        }
+        return beats;
+    }
+
+    void AnimateDrum(int column) {
+        var drum = column switch {
+            0 => drum0,
+            1 => drum1,
+            2 => drum2,
+            3 => drum3,
+            _ => null
+        };
+        if (drum == null) {
+            return;
+        }
+
+        drumFeedbackSequence++;
+        if (column == 0) {
+            UpdateLaneOneDrumAutomationStatus(true);
+        } else {
+            AutomationHelper.SetItemStatus(drum, $"hit:{drumFeedbackSequence}");
+        }
+    }
+
+    void AnimateNote(Note note) {
+        if (!editorNoteVisuals.TryGetValue(Helper.UidGenerator(note), out var noteVisual)) {
+            return;
+        }
+
+        noteVisual.Opacity = 1;
+        noteVisual.RenderTransform = null;
+        noteFeedbackSequence++;
+        AutomationHelper.SetItemStatus(noteVisual, $"hit:{noteFeedbackSequence}|opacity:{noteVisual.Opacity:0.##}");
     }
 
     void OnKeyDown(object? sender, KeyEventArgs e) {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Shift)) {
+            switch (e.Key) {
+                case Key.T:
+                    if (!songIsPlaying) {
+                        AddTimingChangeAtEditorPointerOrCurrentPosition(snappedToGrid: true);
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.Z:
+                    if (!songIsPlaying) {
+                        mapEditor?.Redo();
+                        UpdateDifficultyPrediction();
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+            }
+        }
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control)) {
             switch (e.Key) {
                 case Key.W:
@@ -1549,6 +2820,36 @@ public sealed class MainWindow : Window {
                     SetSnapToGrid(!snapToGrid);
                     e.Handled = true;
                     return;
+                case Key.A:
+                    if (!songIsPlaying && !textInputHasFocus) {
+                        mapEditor?.SelectAllNotes();
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.B:
+                    if (!songIsPlaying) {
+                        AddBookmarkAtEditorPointerOrCurrentPosition();
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.Z:
+                    if (!songIsPlaying) {
+                        mapEditor?.Undo();
+                        UpdateDifficultyPrediction();
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.Y:
+                    if (!songIsPlaying) {
+                        mapEditor?.Redo();
+                        UpdateDifficultyPrediction();
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
                 case Key.OemOpenBrackets:
                     ToggleLeftSidebar();
                     e.Handled = true;
@@ -1561,9 +2862,135 @@ public sealed class MainWindow : Window {
         }
 
         if (e.Key == Key.Space && !textInputHasFocus) {
+            var focusedElement = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+            var focusedElementType = focusedElement == null ? string.Empty : focusedElement.GetType().Name;
+            Focus();
             ToggleSongPlayback();
             e.Handled = true;
+            return;
         }
+
+        if (textInputHasFocus) {
+            return;
+        }
+
+        if (TryHandleEditorNumberKey(e.Key)) {
+            e.Handled = true;
+            return;
+        }
+
+        switch (e.Key) {
+            case Key.Delete:
+                mapEditor?.RemoveSelectedNotes();
+                UpdateDifficultyPrediction();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                mapEditor?.UnselectAllNotes();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    void OnKeyUp(object? sender, KeyEventArgs e) {
+        if (e.Key == Key.Space && !textInputHasFocus) {
+            e.Handled = true;
+        }
+    }
+
+    void OnSpectrogramResizePointerPressed(object? sender, PointerPressedEventArgs e) {
+        if (editorPanel == null || gridSpectrogram == null) {
+            return;
+        }
+
+        if (sender is not Control control) {
+            return;
+        }
+
+        var localPosition = e.GetPosition(control);
+        if (!ReferenceEquals(control, spectrogramResize) && !IsPointerOnSpectrogramResizeEdge(control, localPosition)) {
+            return;
+        }
+
+        spectrogramResizeDragging = true;
+        spectrogramResizeDragOriginX = e.GetPosition(editorPanel).X;
+        spectrogramResizeDragOriginWidth = GetSpectrogramWidth();
+        e.Pointer.Capture(control);
+        e.Handled = true;
+    }
+
+    void OnSpectrogramResizePointerMoved(object? sender, PointerEventArgs e) {
+        if (!spectrogramResizeDragging || editorPanel == null) {
+            return;
+        }
+
+        var position = e.GetPosition(editorPanel);
+        SetSpectrogramWidth(spectrogramResizeDragOriginWidth + (position.X - spectrogramResizeDragOriginX));
+        e.Handled = true;
+    }
+
+    void OnSpectrogramResizePointerReleased(object? sender, PointerReleasedEventArgs e) {
+        if (!spectrogramResizeDragging) {
+            return;
+        }
+
+        spectrogramResizeDragging = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+    }
+
+    bool IsPointerOnSpectrogramResizeEdge(Control control, Point position) {
+        var boundsWidth = control.Bounds.Width;
+        if (boundsWidth <= 0) {
+            return false;
+        }
+
+        return position.X >= boundsWidth - Math.Max(SpectrogramResizeGripWidth + 2, 10);
+    }
+
+    double GetSpectrogramWidth() {
+        if (gridSpectrogram?.ColumnDefinitions.Count > 0) {
+            var configuredWidth = gridSpectrogram.ColumnDefinitions[0].Width;
+            if (configuredWidth.IsAbsolute && configuredWidth.Value > 0) {
+                return configuredWidth.Value;
+            }
+
+            var width = gridSpectrogram.ColumnDefinitions[0].ActualWidth;
+            if (width > 1) {
+                return width;
+            }
+        }
+
+        return spectrogramPreferredWidth;
+    }
+
+    void SetSpectrogramWidth(double desiredWidth, bool refreshSurface = true) {
+        if (gridSpectrogram == null || gridSpectrogram.ColumnDefinitions.Count == 0) {
+            spectrogramPreferredWidth = desiredWidth;
+            return;
+        }
+
+        var clampedWidth = Math.Clamp(desiredWidth, 20, GetSpectrogramMaxWidth());
+        spectrogramPreferredWidth = clampedWidth;
+        gridSpectrogram.ColumnDefinitions[0].Width = new GridLength(clampedWidth);
+        gridSpectrogram.ColumnDefinitions[1].Width = new GridLength(SpectrogramResizeGripWidth);
+        gridSpectrogram.Width = clampedWidth + SpectrogramResizeGripWidth;
+
+        if (refreshSurface) {
+            ApplyEditorLayoutMetrics();
+            RefreshSpectrogramVisuals();
+        }
+    }
+
+    double GetSpectrogramMaxWidth() {
+        var panelWidth = editorPanel != null && editorPanel.Bounds.Width > 1
+            ? editorPanel.Bounds.Width
+            : ClientSize.Width;
+        var navWidth = borderNavWaveform != null && borderNavWaveform.Bounds.Width > 1
+            ? borderNavWaveform.Bounds.Width
+            : ImgWaveformVertical?.Width ?? 64;
+        var available = panelWidth - navWidth - EditorSurfaceMinWidth - 3;
+        return Math.Max(20, available);
     }
 
     void OnNumericTextBoxKeyDown(object? sender, KeyEventArgs e) {
@@ -1654,6 +3081,253 @@ public sealed class MainWindow : Window {
         return TryParseDouble(userSettings.GetValueForKey(key), out var parsedValue) ? parsedValue : defaultValue;
     }
 
+    void RefreshEditorDisplayPreferences() {
+        if (mainWaveformCanvas == null || gridSpectrogram == null || borderSpectrogram == null || spectrogramCanvas == null) {
+            return;
+        }
+
+        var showSpectrogram = GetSettingBool(UserSettingsKey.EnableSpectrogram, DefaultUserSettings.EnableSpectrogram);
+        var showGridWaveform = CheckWaveform.IsChecked ?? false;
+
+        gridSpectrogram.IsVisible = showSpectrogram;
+        borderSpectrogram.IsVisible = showSpectrogram;
+        spectrogramCanvas.IsVisible = showSpectrogram;
+
+        mainWaveformCanvas.IsVisible = showGridWaveform;
+
+        RefreshSpectrogramVisuals();
+        RefreshEditorSurface();
+    }
+
+    void RefreshSpectrogramVisuals() {
+        if (spectrogramCanvas == null) {
+            return;
+        }
+
+        if (!GetSettingBool(UserSettingsKey.EnableSpectrogram, DefaultUserSettings.EnableSpectrogram)) {
+            ClearSpectrogramBitmaps(clearVisuals: true);
+            return;
+        }
+
+        var width = Math.Max(20, scrollSpectrogram.Bounds.Width > 1
+            ? scrollSpectrogram.Bounds.Width
+            : borderSpectrogram.Bounds.Width > 1
+                ? borderSpectrogram.Bounds.Width
+                : spectrogramCanvas.Width);
+        var totalHeight = Math.Max(GetEditorViewportHeight(), GetEditorContentHeight());
+        var beatContentHeight = Math.Max(1, totalHeight - GetEditorViewportHeight());
+        var topPadding = GetEditorTopPadding();
+        var numChunks = GetSettingBool(UserSettingsKey.SpectrogramChunking, DefaultUserSettings.SpectrogramChunking)
+            ? Editor.Spectrogram.NumberOfChunks
+            : 1;
+
+        UpdateSpectrogramLayout(width, totalHeight, beatContentHeight, topPadding, numChunks);
+        ScheduleSpectrogramRender(numChunks);
+    }
+
+    void RefreshNavigationVisuals() {
+        if (ImgWaveformVertical == null || navWaveformBackdrop == null || CanvasNavNotes == null || CanvasBookmarks == null || CanvasTimingChanges == null) {
+            return;
+        }
+
+        var width = GetNavWaveformWidth();
+        var height = GetNavWaveformHeight();
+
+        ConfigureNavCanvas(navWaveformBackdrop, width, height);
+        ConfigureNavCanvas(CanvasNavNotes, width, height);
+        ConfigureNavCanvas(CanvasBookmarks, width, height);
+        ConfigureNavCanvas(CanvasTimingChanges, width, height);
+        ConfigureNavCanvas(canvasBookmarkLabels, width, height);
+        ConfigureNavCanvas(canvasTimingChangeLabels, width, height);
+        ConfigureNavCanvas(CanvasNavInputBox, width, height);
+
+        EnsureNavWaveformImage();
+        CanvasNavNotes.Children.Clear();
+        navNoteVisuals.Clear();
+        CanvasBookmarks.Children.Clear();
+        CanvasTimingChanges.Children.Clear();
+        canvasBookmarkLabels.Children.Clear();
+        canvasTimingChangeLabels.Children.Clear();
+
+        if (navWaveformImage != null) {
+            navWaveformImage.Width = width;
+            navWaveformImage.Height = height;
+        }
+
+        AutomationHelper.SetItemStatus(ImgWaveformVertical, $"width:{width:0.##}|height:{height:0.##}");
+        ScheduleNavWaveformRender(width, height);
+
+        if (mapEditor?.currentMapDifficulty != null) {
+            var bookmarkBrush = ResolveBrush(userSettings.GetValueForKey(UserSettingsKey.NavBookmarkColor), Editor.NavBookmark.Colour, opacity: Editor.NavBookmark.Opacity);
+            var bpmChangeBrush = ResolveBrush(userSettings.GetValueForKey(UserSettingsKey.NavBPMChangeColor), Editor.NavBPMChange.Colour, opacity: Editor.NavBPMChange.Opacity);
+
+            DrawNavNotes(mapEditor.currentMapDifficulty.notes);
+
+            foreach (var bookmark in mapEditor.currentMapDifficulty.bookmarks) {
+                var y = BeatToNavY(bookmark.beat, height);
+                CanvasBookmarks.Children.Add(CreateNavLine(width, y, bookmarkBrush, Editor.NavBookmark.Thickness));
+                canvasBookmarkLabels.Children.Add(CreateBookmarkNavLabel(bookmark.name, y, width, bookmarkBrush));
+            }
+
+            foreach (var bpmChange in mapEditor.currentMapDifficulty.bpmChanges) {
+                var y = BeatToNavY(bpmChange.globalBeat, height);
+                CanvasTimingChanges.Children.Add(CreateNavLine(width, y, bpmChangeBrush, Editor.NavBPMChange.Thickness));
+                foreach (var label in CreateTimingChangeNavLabels(bpmChange, y, width)) {
+                    canvasTimingChangeLabels.Children.Add(label);
+                }
+            }
+        }
+
+        RefreshSongProgressIndicator();
+    }
+
+    void RefreshSongProgressIndicator() {
+        if (lineSongProgress == null || ImgWaveformVertical == null) {
+            return;
+        }
+
+        var width = GetNavWaveformWidth();
+        var height = GetNavWaveformHeight();
+        var ratio = SliderSongProgress.Maximum <= 0 ? 0 : Math.Clamp(currentSongPositionMilliseconds / SliderSongProgress.Maximum, 0, 1);
+        var y = height * (1 - ratio);
+        lineSongProgress.StartPoint = new Point(0, y);
+        lineSongProgress.EndPoint = new Point(width, y);
+        AutomationHelper.SetItemStatus(lineSongProgress, $"y:{y:0.##}|height:{height:0.##}|ratio:{ratio:0.####}");
+    }
+
+    void RefreshSongMouseoverIndicator(double pointerY, bool isVisible) {
+        if (lineSongMouseover == null || ImgWaveformVertical == null) {
+            return;
+        }
+
+        var width = GetNavWaveformWidth();
+        var height = GetNavWaveformHeight();
+        var y = Math.Clamp(pointerY, 0, height);
+        lineSongMouseover.StartPoint = new Point(0, y);
+        lineSongMouseover.EndPoint = new Point(width, y);
+        lineSongMouseover.Opacity = isVisible ? 1 : 0;
+    }
+
+    double GetNavWaveformWidth() {
+        if (navWaveformVisualHost != null && navWaveformVisualHost.Bounds.Width > 1) {
+            return Math.Max(20, navWaveformVisualHost.Bounds.Width);
+        }
+
+        if (borderNavWaveform != null && borderNavWaveform.Bounds.Width > 1) {
+            return Math.Max(20, borderNavWaveform.Bounds.Width);
+        }
+
+        if (ImgWaveformVertical != null && ImgWaveformVertical.Bounds.Width > 1) {
+            return Math.Max(20, ImgWaveformVertical.Bounds.Width);
+        }
+
+        return Math.Max(20, ImgWaveformVertical?.Width ?? 64);
+    }
+
+    double GetNavWaveformHeight() {
+        if (navWaveformVisualHost != null && navWaveformVisualHost.Bounds.Height > 1) {
+            return Math.Max(1, navWaveformVisualHost.Bounds.Height);
+        }
+
+        if (borderNavWaveform != null && borderNavWaveform.Bounds.Height > 1) {
+            return Math.Max(1, borderNavWaveform.Bounds.Height);
+        }
+
+        if (ImgWaveformVertical != null && ImgWaveformVertical.Bounds.Height > 1) {
+            return Math.Max(1, ImgWaveformVertical.Bounds.Height);
+        }
+
+        if (navWaveformVisualHost != null && navWaveformVisualHost.Height > 1) {
+            return navWaveformVisualHost.Height;
+        }
+
+        if (ImgWaveformVertical != null && ImgWaveformVertical.Height > 1) {
+            return ImgWaveformVertical.Height;
+        }
+
+        return Math.Max(1, GetEditorViewportHeight());
+    }
+
+    double BeatToNavY(double beat, double navHeight) {
+        var totalBeats = Math.Max(1, currentSongDurationSeconds * Math.Max(1, CurrentGlobalBpm) / 60.0);
+        var ratio = Math.Clamp(beat / totalBeats, 0, 1);
+        return navHeight * (1 - ratio);
+    }
+
+    static void ConfigureNavCanvas(Canvas canvas, double width, double height) {
+        canvas.Width = width;
+        canvas.Height = height;
+    }
+
+    Line CreateNavLine(double width, double y, IBrush brush, double thickness) {
+        return new Line {
+            StartPoint = new Point(0, y),
+            EndPoint = new Point(width, y),
+            Stroke = brush,
+            StrokeThickness = thickness
+        };
+    }
+
+    Border CreateBookmarkNavLabel(string text, double y, double width, IBrush foreground) {
+        var label = new Border {
+            Background = new SolidColorBrush(AvaloniaColor.Parse("#BF000000")),
+            Padding = new Thickness(2, 0),
+            Child = new TextBlock {
+                Text = text,
+                FontSize = 10,
+                FontWeight = FontWeight.Bold,
+                Foreground = foreground,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Width = Math.Max(24, width - 2),
+                TextAlignment = TextAlignment.Right
+            }
+        };
+        Canvas.SetLeft(label, 0);
+        Canvas.SetTop(label, Math.Clamp(y - 8, 0, Math.Max(0, ImgWaveformVertical.Height - 14)));
+        return label;
+    }
+
+    IEnumerable<Border> CreateTimingChangeNavLabels(BPMChange bpmChange, double y, double width) {
+        var labelBrush = ResolveBrush(userSettings.GetValueForKey(UserSettingsKey.NavBPMChangeLabelColor), Editor.NavBPMChange.LabelColour, opacity: Editor.NavBPMChange.Opacity);
+
+        Border makeLabel(string text, double top) {
+            var label = new Border {
+                Background = new SolidColorBrush(AvaloniaColor.Parse("#BF000000")),
+                Padding = new Thickness(2, 0),
+                Child = new TextBlock {
+                    Text = text,
+                    FontSize = 10,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = labelBrush,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Width = Math.Max(24, width - 2),
+                    TextAlignment = TextAlignment.Left
+                }
+            };
+            Canvas.SetLeft(label, 0);
+            Canvas.SetTop(label, Math.Clamp(top, 0, Math.Max(0, ImgWaveformVertical.Height - 14)));
+            return label;
+        }
+
+        yield return makeLabel($"1/{Math.Max(1, bpmChange.gridDivision)} beat", y - 8);
+        yield return makeLabel($"{FormatNumber(bpmChange.BPM)} BPM", y - 19);
+    }
+
+    SolidColorBrush ResolveBrush(string? colorValue, string fallbackColor, double opacity = 1) {
+        AvaloniaColor color;
+        try {
+            color = AvaloniaColor.Parse(string.IsNullOrWhiteSpace(colorValue) ? fallbackColor : colorValue);
+        } catch {
+            color = AvaloniaColor.Parse(fallbackColor);
+        }
+
+        if (opacity < 1) {
+            color = AvaloniaColor.FromArgb((byte)Math.Clamp((int)Math.Round(color.A * opacity), 0, 255), color.R, color.G, color.B);
+        }
+
+        return new SolidColorBrush(color);
+    }
+
     static string FormatMedalDistance(int distance) {
         return distance == 0 ? "Auto" : distance.ToString(CultureInfo.InvariantCulture);
     }
@@ -1671,6 +3345,223 @@ public sealed class MainWindow : Window {
                double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
     }
 
+    void UpdateSongDurationText() {
+        if (TxtSongDuration != null) {
+            TxtSongDuration.Text = Helper.TimeFormat(currentSongDurationSeconds);
+        }
+    }
+
+    void UpdateCoverPreview() {
+        if (ImgCover == null) {
+            return;
+        }
+
+        coverPreviewBitmap?.Dispose();
+        coverPreviewBitmap = null;
+
+        string? coverPath = null;
+        if (mapEditor != null) {
+            var coverFileName = GetMapString("_coverImageFilename");
+            if (!string.IsNullOrWhiteSpace(coverFileName)) {
+                coverPath = Path.Combine(mapEditor.mapFolder, coverFileName);
+            }
+        }
+
+        coverPreviewBitmap = TryLoadBitmap(coverPath ?? string.Empty) ??
+            TryLoadBitmap(Path.Combine(AppContext.BaseDirectory, "Resources", "placeholder.png"));
+        ImgCover.Source = coverPreviewBitmap;
+    }
+
+    internal void UpdateDifficultyPrediction() {
+        var predictor = ResolveDifficultyPredictor();
+        var showInMapStats = GetSettingBool(UserSettingsKey.DifficultyPredictorShowInMapStats, DefaultUserSettings.DifficultyPredictorShowInMapStats);
+        if (!showInMapStats || mapEditor?.currentMapDifficulty == null || !predictor.GetSupportedFeatures().HasFlag(IDifficultyPredictor.Features.RealTime)) {
+            DifficultyPrediction.IsVisible = false;
+            DifficultyPrediction.Text = "Difficulty prediction unavailable in this slice.";
+            return;
+        }
+
+        var supportedFeatures = predictor.GetSupportedFeatures();
+        var prediction = predictor.PredictDifficulty(mapEditor.currentMapDifficulty.notes, mapEditor.GlobalBPM, mapEditor.SongDuration);
+        if (prediction.HasValue && (float.IsNaN(prediction.Value) || float.IsInfinity(prediction.Value))) {
+            prediction = supportedFeatures.HasFlag(IDifficultyPredictor.Features.AlwaysPredict) ? 0 : null;
+        }
+        DifficultyPrediction.IsVisible = true;
+        if (prediction.HasValue) {
+            var precise = GetSettingBool(UserSettingsKey.DifficultyPredictorShowPrecise, DefaultUserSettings.DifficultyPredictorShowPrecise) &&
+                supportedFeatures.HasFlag(IDifficultyPredictor.Features.PreciseFloat);
+            var displayValue = Math.Round(prediction.Value, precise ? 2 : 0);
+            DifficultyPrediction.Text = $"Difficulty: {displayValue.ToString(precise ? "#0.00" : "0", CultureInfo.CurrentCulture)}";
+            SetTextForeground(DifficultyPrediction, Edda.Const.DifficultyPrediction.Colour);
+            return;
+        }
+
+        if (!supportedFeatures.HasFlag(IDifficultyPredictor.Features.AlwaysPredict)) {
+            DifficultyPrediction.Text = "Difficulty: ???";
+            SetTextForeground(DifficultyPrediction, Edda.Const.DifficultyPrediction.WarningColour);
+            return;
+        }
+
+        DifficultyPrediction.Text = "Difficulty: 0";
+        SetTextForeground(DifficultyPrediction, Edda.Const.DifficultyPrediction.Colour);
+    }
+
+    internal void RefreshNavigationLayersFromSettings() {
+        ImgWaveformVertical.IsVisible = GetSettingBool(UserSettingsKey.EnableNavWaveform, DefaultUserSettings.EnableNavWaveform);
+
+        var showBookmarks = GetSettingBool(UserSettingsKey.EnableNavBookmarks, DefaultUserSettings.EnableNavBookmarks);
+        var showTimingChanges = GetSettingBool(UserSettingsKey.EnableNavBPMChanges, DefaultUserSettings.EnableNavBPMChanges);
+        var showNotes = GetSettingBool(UserSettingsKey.EnableNavNotes, DefaultUserSettings.EnableNavNotes);
+
+        CanvasBookmarks.IsVisible = showBookmarks;
+        canvasBookmarkLabels.IsVisible = showBookmarks;
+        CanvasTimingChanges.IsVisible = showTimingChanges;
+        canvasTimingChangeLabels.IsVisible = showTimingChanges;
+        CanvasNavNotes.IsVisible = showNotes;
+        RefreshNavigationVisuals();
+    }
+
+    void AddBookmarkAtCurrentPosition() {
+        if (mapEditor == null) {
+            return;
+        }
+
+        mapEditor.AddBookmark(new Bookmark(GetCurrentSongBeat(), Editor.NavBookmark.DefaultName));
+    }
+
+    void AddBookmarkAtEditorPointerOrCurrentPosition() {
+        var beat = editorPointerInside ? GetActiveEditorBeat() : GetCurrentSongBeat();
+        AddBookmarkAtBeat(beat);
+    }
+
+    void AddBookmarkAtBeat(double beat) {
+        if (mapEditor == null) {
+            return;
+        }
+
+        mapEditor.AddBookmark(new Bookmark(Math.Round(beat, 3), Editor.NavBookmark.DefaultName));
+    }
+
+    void AddTimingChangeAtCurrentPosition() {
+        if (mapEditor == null) {
+            return;
+        }
+
+        mapEditor.AddBPMChange(new BPMChange(Math.Round(GetCurrentSongBeat(), 3), CurrentGlobalBpm, CurrentGridDivision));
+        RefreshOpenToolWindows();
+    }
+
+    void AddTimingChangeAtEditorPointerOrCurrentPosition(bool snappedToGrid) {
+        var beat = editorPointerInside
+            ? GetActiveEditorBeat(snappedToGrid)
+            : GetCurrentSongBeat();
+        AddTimingChangeAtBeat(beat);
+    }
+
+    void AddTimingChangeAtBeat(double beat) {
+        if (mapEditor?.currentMapDifficulty == null) {
+            return;
+        }
+
+        var roundedBeat = Math.Round(beat, 3);
+        var previous = new BPMChange(0, mapEditor.GlobalBPM, CurrentGridDivision);
+        foreach (var change in mapEditor.currentMapDifficulty.bpmChanges) {
+            if (change.globalBeat < roundedBeat) {
+                previous = change;
+            }
+        }
+
+        mapEditor.AddBPMChange(new BPMChange(roundedBeat, previous.BPM, previous.gridDivision));
+        RefreshOpenToolWindows();
+    }
+
+    void AddNoteAtCurrentPosition(int column) {
+        if (mapEditor == null || column < 0 || column > 3) {
+            return;
+        }
+
+        var note = new Note(Math.Round(GetCurrentSongBeat(), 3), column);
+        mapEditor.AddNotes(note);
+        drummer?.Play(note.col);
+        AnimateDrum(note.col);
+        AnimateNote(note);
+        UpdateDifficultyPrediction();
+    }
+
+    bool TryHandleEditorNumberKey(Key key) {
+        if (mapEditor == null) {
+            return false;
+        }
+
+        var column = key switch {
+            Key.D1 or Key.NumPad1 => 0,
+            Key.D2 or Key.NumPad2 => 1,
+            Key.D3 or Key.NumPad3 => 2,
+            Key.D4 or Key.NumPad4 => 3,
+            _ => -1
+        };
+        if (column < 0) {
+            return false;
+        }
+        if (songIsPlaying) {
+            AddNoteAtCurrentPosition(column);
+            return true;
+        }
+
+        if (!editorPointerInside) {
+            return false;
+        }
+
+        AddNoteAtEditorBeat(column);
+        return true;
+    }
+
+    internal void RefreshOpenToolWindows() {
+        if (changeBpmWindow is ChangeBpmWindow bpmWindow && bpmWindow.IsVisible) {
+            bpmWindow.RefreshRows();
+        }
+    }
+
+    internal void RefreshEditorGridFromToolWindow() {
+        RefreshEditorSurface();
+    }
+
+    double GetCurrentSongBeat() {
+        return currentSongPositionMilliseconds / 60000.0 * Math.Max(1, CurrentGlobalBpm);
+    }
+
+    double ResolveSongDurationSeconds() {
+        var fallbackDurationSeconds = Math.Max(1, GetMapDouble("_songApproximativeDuration"));
+        var songPath = CurrentSongPath;
+        if (string.IsNullOrWhiteSpace(songPath) || !File.Exists(songPath)) {
+            return fallbackDurationSeconds;
+        }
+
+        try {
+            using var vorbisStream = TryOpenVorbis(songPath);
+            var actualDurationSeconds = Math.Max(1, (int)vorbisStream.TotalTime.TotalSeconds + 1);
+            if (mapEditor != null && (int)fallbackDurationSeconds != actualDurationSeconds) {
+                mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject(actualDurationSeconds));
+            }
+
+            return actualDurationSeconds;
+        } catch {
+            return fallbackDurationSeconds;
+        }
+    }
+
+    internal IDifficultyPredictor ResolveDifficultyPredictor() {
+        return userSettings.GetValueForKey(UserSettingsKey.DifficultyPredictorAlgorithm) switch {
+            Edda.Const.DifficultyPrediction.SupportedAlgorithms.Nytilde => DifficultyPredictorNytilde.SINGLETON,
+            Edda.Const.DifficultyPrediction.SupportedAlgorithms.Melchior => DifficultyPredictorMelchior.SINGLETON,
+            _ => DifficultyPredictorPKBeam.SINGLETON
+        };
+    }
+
+    static void SetTextForeground(TextBlock textBlock, System.Drawing.Color color) {
+        textBlock.Foreground = new SolidColorBrush(AvaloniaColor.FromArgb(color.A, color.R, color.G, color.B));
+    }
+
     static VorbisWaveReader TryOpenVorbis(string songFilePath) {
         try {
             return new VorbisWaveReader(songFilePath);
@@ -1686,33 +3577,105 @@ public sealed class MainWindow : Window {
     }
 
     sealed class EditorUiAdapter : IMapEditorUiAdapter {
+        readonly MainWindow owner;
         readonly UserSettingsManager userSettings;
         string? clipboardText;
 
-        public EditorUiAdapter(UserSettingsManager userSettings) {
+        public EditorUiAdapter(MainWindow owner, UserSettingsManager userSettings) {
+            this.owner = owner;
             this.userSettings = userSettings;
         }
 
         public string GetUserSetting(string key) => userSettings.GetValueForKey(key) ?? string.Empty;
         public bool IsShiftKeyDown => false;
-        public void UpdateDifficultyButtons() { }
-        public void DrawEditorGrid(bool redrawWaveform = true) { }
-        public void RefreshBPMChanges() { }
+        public void UpdateDifficultyButtons() => owner.RefreshDifficultyButtons();
+        public void DrawEditorGrid(bool redrawWaveform = true) => owner.RefreshEditorSurface();
+        public void RefreshBPMChanges() => owner.RefreshOpenToolWindows();
         public void RefreshDiscordPresence() { }
-        public void SetMapStats(MapStats stats) { }
-        public void DrawNotes(IEnumerable<Note> notes) { }
-        public void DrawNavNotes(IEnumerable<Note> notes) { }
-        public void UndrawNotes(IEnumerable<Note> notes) { }
-        public void UndrawNavNotes(IEnumerable<Note> notes) { }
-        public void HighlightNotes(IEnumerable<Note> notes) { }
-        public void HighlightNavNotes(IEnumerable<Note> notes) { }
-        public void HighlightAllNotes() { }
-        public void HighlightAllNavNotes() { }
-        public void UnhighlightNotes(IEnumerable<Note> notes) { }
-        public void UnhighlightNavNotes(IEnumerable<Note> notes) { }
-        public void UnhighlightAllNotes() { }
-        public void UnhighlightAllNavNotes() { }
+        public void SetMapStats(MapStats stats) => owner.SetMapStats(stats);
+        public void DrawNotes(IEnumerable<Note> notes) => owner.DrawEditorNotes(notes);
+        public void DrawNavNotes(IEnumerable<Note> notes) => owner.DrawNavNotes(notes);
+        public void UndrawNotes(IEnumerable<Note> notes) => owner.UndrawEditorNotes(notes);
+        public void UndrawNavNotes(IEnumerable<Note> notes) => owner.UndrawNavNotes(notes);
+        public void HighlightNotes(IEnumerable<Note> notes) => owner.UpdateEditorNoteHighlights(notes, isHighlighted: true);
+        public void HighlightNavNotes(IEnumerable<Note> notes) => owner.UpdateNavNoteHighlights(notes, isHighlighted: true);
+        public void HighlightAllNotes() => owner.UpdateAllEditorNoteHighlights(isHighlighted: true);
+        public void HighlightAllNavNotes() => owner.UpdateAllNavNoteHighlights(isHighlighted: true);
+        public void UnhighlightNotes(IEnumerable<Note> notes) => owner.UpdateEditorNoteHighlights(notes, isHighlighted: false);
+        public void UnhighlightNavNotes(IEnumerable<Note> notes) => owner.UpdateNavNoteHighlights(notes, isHighlighted: false);
+        public void UnhighlightAllNotes() => owner.UpdateAllEditorNoteHighlights(isHighlighted: false);
+        public void UnhighlightAllNavNotes() => owner.UpdateAllNavNoteHighlights(isHighlighted: false);
         public void SetClipboardText(string text) => clipboardText = text;
         public string? GetClipboardText() => clipboardText;
+    }
+
+    sealed class AvaloniaSongPreviewUiAdapter : ISongPreviewUiAdapter {
+        readonly MainWindow owner;
+
+        public AvaloniaSongPreviewUiAdapter(MainWindow owner) {
+            this.owner = owner;
+        }
+
+        public MMDevice GetPlaybackDevice() {
+            return owner.GetPlaybackDevice()!;
+        }
+
+        public float GetSongVolume() {
+            return (float)owner.SliderSongVol.Value;
+        }
+
+        public int GetEditorAudioLatency() {
+            return owner.editorAudioLatency;
+        }
+
+        public void SetPreviewPlaying(bool isPlaying) {
+            owner.SetButtonIcon(owner.BtnPlayPreview, isPlaying ? "stopButton.png" : "playButton.png", isPlaying ? "Stop preview" : "Play preview", 14);
+        }
+
+        public void SetPreviewButtonEnabled(bool isEnabled) {
+            owner.BtnPlayPreview.IsEnabled = isEnabled;
+            owner.BtnPlayPreview.Opacity = isEnabled ? 1 : 0.6;
+        }
+    }
+
+    sealed class AvaloniaDeviceChangeUiAdapter : IDeviceChangeUiAdapter {
+        readonly MainWindow owner;
+
+        public AvaloniaDeviceChangeUiAdapter(MainWindow owner) {
+            this.owner = owner;
+        }
+
+        public bool PlayingOnDefaultDevice => owner.PlayingOnDefaultDevice;
+        public bool DefaultDeviceAvailable => owner.DefaultDeviceAvailable;
+        public string UserPreferredPlaybackDeviceId => owner.userSettings.GetValueForKey(UserSettingsKey.PlaybackDeviceID) ?? string.Empty;
+        public string PlaybackDeviceId => owner.PlaybackDeviceId ?? string.Empty;
+
+        public void InvokeOnUiThread(Action action) {
+            Dispatcher.UIThread.Post(action);
+        }
+
+        public void UpdatePlaybackDevice(string playbackDeviceId, bool useDefaultDevice) {
+            owner.UpdatePlaybackDevice(playbackDeviceId, useDefaultDevice);
+        }
+    }
+
+    sealed class AvaloniaNoteScannerUiAdapter : INoteScannerUiAdapter {
+        readonly MainWindow owner;
+
+        public AvaloniaNoteScannerUiAdapter(MainWindow owner) {
+            this.owner = owner;
+        }
+
+        public void InvokeOnUiThread(Action action) {
+            Dispatcher.UIThread.Post(action);
+        }
+
+        public void AnimateDrum(int column) {
+            owner.AnimateDrum(column);
+        }
+
+        public void AnimateNote(Note note) {
+            owner.AnimateNote(note);
+        }
     }
 }

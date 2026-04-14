@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Drawing;
 using Xunit;
 
 namespace Edda.Wpf.UI.Tests {
@@ -8,6 +9,7 @@ namespace Edda.Wpf.UI.Tests {
         private const string SongProgressSliderId = "sliderSongProgress";
         private const string GridDivisionTextBoxId = "txtGridDivision";
         private const string ChangeBpmButtonId = "btnChangeBPM";
+        private const string ScrollEditorId = "scrollEditor";
 
         private const string ChangeBpmGlobalValueId = "lblGlobalBPM";
         private const string ChangeBpmGridId = "dataBPMChange";
@@ -160,6 +162,42 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void ChangeBpmWindowAddsNewRowsFromWindowAndPersistsAfterReopen() {
+            WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+                driver.ClickButton(ChangeBpmButtonId);
+                driver.WaitForIdle();
+                var initialRows = driver.GetDataGridRowCount(ChangeBpmGridId);
+
+                Assert.True(driver.TryAddDataGridNewItemRow(ChangeBpmGridId, "3", "180", "6"));
+                Assert.Equal(initialRows + 1, driver.GetDataGridRowCount(ChangeBpmGridId));
+
+                driver.ClickButton(ChangeBpmExitButtonId);
+                driver.WaitForIdle();
+                driver.ClickButton(ChangeBpmButtonId);
+                driver.WaitForIdle();
+
+                Assert.Equal(initialRows + 1, driver.GetDataGridRowCount(ChangeBpmGridId));
+            });
+        }
+
+        [Fact]
+        public void ChangeBpmEditsRefreshMainEditorGridWhileWindowStaysOpen() {
+            WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+                AddTimingChangeAt(driver, 2_000);
+                driver.ClickButton(ChangeBpmButtonId);
+                driver.WaitForIdle();
+
+                using var before = driver.CaptureElementBitmap(ScrollEditorId);
+                driver.SetDataGridCellText(ChangeBpmGridId, 0, 2, "8");
+                driver.WaitForIdle();
+                using var after = driver.CaptureElementBitmap(ScrollEditorId);
+
+                var diff = GetMeanAbsoluteRgbDifference(before, after);
+                Assert.True(diff > 1.5, $"Expected Change BPM edits to refresh main editor grid before closing the window, but mean RGB difference was only {diff:0.##}.");
+            });
+        }
+
+        [Fact]
         public void ChangeBpmWindowExitClosesWindow() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 driver.ClickButton(ChangeBpmButtonId);
@@ -182,6 +220,24 @@ namespace Edda.Wpf.UI.Tests {
             var firstBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 0));
             var secondBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 1, 0));
             Assert.True(firstBeat <= secondBeat, $"Expected sorted beats but got {firstBeat} and {secondBeat}.");
+        }
+
+        private static double GetMeanAbsoluteRgbDifference(Bitmap before, Bitmap after) {
+            var width = Math.Min(before.Width, after.Width);
+            var height = Math.Min(before.Height, after.Height);
+            double total = 0;
+            var samples = 0;
+
+            for (var y = 0; y < height; y++) {
+                for (var x = 0; x < width; x++) {
+                    var left = before.GetPixel(x, y);
+                    var right = after.GetPixel(x, y);
+                    total += (Math.Abs(left.R - right.R) + (Math.Abs(left.G - right.G)) + (Math.Abs(left.B - right.B))) / 3.0;
+                    samples++;
+                }
+            }
+
+            return samples == 0 ? 0 : total / samples;
         }
 
         private static double ParseDoubleCell(string value) {

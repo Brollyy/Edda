@@ -1,17 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using Xunit;
 
 namespace Edda.Wpf.UI.Tests {
+
     public class MainWindowTests {
         private const string StartWindowId = "StartWindow";
         private const string StartupOpenMapButtonId = "ButtonOpenMap";
+        private const string StartupRecentMapsListId = "ListViewRecentMaps";
         private const string MainWindowId = "AppMainWindow";
+        private const string LeftSidebarId = "borderLeftDock";
+        private const string RightSidebarId = "borderRightDock";
         private const string LeftSidebarSentinelId = "txtSongName";
         private const string RightSidebarSentinelId = "txtDifficultyNumber";
 
@@ -37,11 +43,15 @@ namespace Edda.Wpf.UI.Tests {
         private const string DrumVolumeTextId = "txtDrumVol";
         private const string SongTempoSliderId = "sliderSongTempo";
         private const string SongPositionTextId = "txtSongPosition";
+        private const string SongDurationTextId = "txtSongDuration";
         private const string SelectedBeatLabelId = "lblSelectedBeat";
         private const string PreviewPlayButtonId = "btnPlayPreview";
         private const string DifficultyPredictionLabelId = "difficultyPrediction";
+        private const string CoverImageId = "imgCover";
 
         private const string NavWaveformImageId = "imgWaveformVertical";
+        private const string EditorPanelId = "EditorPanel";
+        private const string ScrollSpectrogramId = "scrollSpectrogram";
         private const string NavBookmarksCanvasId = "canvasBookmarks";
         private const string NavBpmChangesCanvasId = "canvasTimingChanges";
         private const string NavNotesCanvasId = "canvasNavNotes";
@@ -54,6 +64,7 @@ namespace Edda.Wpf.UI.Tests {
         private const string SnapToGridMenuItemId = "MenuItemSnapToGrid";
         private const string GridDivisionTextBoxId = "txtGridDivision";
         private const string GridSpacingTextBoxId = "txtGridSpacing";
+        private const string ScrollEditorId = "scrollEditor";
         private const string NavWaveformId = "borderNavWaveform";
         private const string NavWaveformDragTargetId = "canvasNavInputBox";
 
@@ -67,10 +78,28 @@ namespace Edda.Wpf.UI.Tests {
         private const string BronzeMedalDistanceTextBoxId = "txtDistMedal0";
         private const string SilverMedalDistanceTextBoxId = "txtDistMedal1";
         private const string GoldMedalDistanceTextBoxId = "txtDistMedal2";
+        private const string NotesStatsAllId = "notesStatsAll";
+        private const string NotesStatsSelectedId = "notesStatsSelected";
+        private const string NotesStatsSingleId = "notesStatsSingle";
+        private const string NotesStatsDoubleId = "notesStatsDouble";
+        private const string NotesStatsTriplePlusId = "notesStatsTriplePlus";
+        private const string ColumnStatsButtonId = "columnStats";
+        private const string ColumnStatsValue1Id = "columnStatsValue1";
+        private const string ColumnStatsValue2Id = "columnStatsValue2";
+        private const string ColumnStatsValue3Id = "columnStatsValue3";
+        private const string ColumnStatsValue4Id = "columnStatsValue4";
+        private const string ColumnStatsPercentage1Id = "columnStatsPercentage1";
+        private const string ColumnStatsPercentage2Id = "columnStatsPercentage2";
+        private const string ColumnStatsPercentage3Id = "columnStatsPercentage3";
+        private const string ColumnStatsPercentage4Id = "columnStatsPercentage4";
 
         private const string ChangeBpmButtonId = "btnChangeBPM";
         private const string CustomizeNavBarButtonId = "btnCustomizeNavBar";
         private const string CreatePreviewButtonId = "btnMakePreview";
+        private const string Drum0Id = "Drum0";
+        private const string Drum1Id = "Drum1";
+        private const string Drum2Id = "Drum2";
+        private const string Drum3Id = "Drum3";
 
         private const string BpmWindowSentinelId = "lblAvgBPM";
         private const string PredictorWindowSentinelId = "btnPredict";
@@ -133,6 +162,89 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void FixtureMapShowsExactVisibleMetadataAndPlaybackDefaults() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                Assert.Equal("Fixture Song", driver.GetText(SongNameTextBoxId));
+                Assert.Equal("Fixture Artist", driver.GetText(ArtistNameTextBoxId));
+                Assert.Equal("Fixture Mapper", driver.GetText(MapperNameTextBoxId));
+                Assert.Equal("120", driver.GetText(SongBpmTextBoxId));
+                Assert.Equal("Midgard", driver.GetSelectedValue(EnvironmentComboBoxId));
+                Assert.Equal("song.ogg", driver.GetText(SongFileNameTextId));
+                Assert.Equal("cover.jpg", driver.GetText(CoverFileNameTextId));
+                Assert.Equal("0:00", driver.GetText(SongPositionTextId));
+                Assert.Equal("40%", driver.GetText(SongVolumeTextId));
+                Assert.Equal("100%", driver.GetText(DrumVolumeTextId));
+                AssertTempoText(driver, 1.0);
+            });
+        }
+
+        [Fact]
+        public void FixtureMapShowsVisibleActionsStatsArtworkAndNavigationDefaults() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var songPlayer = driver.GetElementBounds(SongPlayerButtonId);
+                var pickSong = driver.GetElementBounds(PickSongButtonId);
+                var pickCover = driver.GetElementBounds(PickCoverButtonId);
+                var playPreview = driver.GetElementBounds(PreviewPlayButtonId);
+                var createPreview = driver.GetElementBounds(CreatePreviewButtonId);
+                var coverImage = driver.GetElementBounds(CoverImageId);
+
+                Assert.Equal("Create Song Preview", driver.GetText(CreatePreviewButtonId));
+                Assert.Equal("Edit Song Timing", driver.GetText(ChangeBpmButtonId));
+                Assert.Equal("Customize Navigation Bar", driver.GetText(CustomizeNavBarButtonId));
+                Assert.False(driver.IsVisible(DifficultyPredictionLabelId));
+                Assert.NotEqual("0:00", driver.GetText(SongDurationTextId));
+
+                Assert.True(songPlayer.width <= 40 && songPlayer.height <= 40, $"Expected the song playback action to be rendered as a compact icon button, but bounds were {songPlayer.width:0.##}x{songPlayer.height:0.##}.");
+                Assert.True(pickSong.width <= 30 && pickSong.height >= 18, $"Expected the song picker action to use a compact icon button, but bounds were {pickSong.width:0.##}x{pickSong.height:0.##}.");
+                Assert.True(pickCover.width <= 30 && pickCover.height >= 18, $"Expected the cover picker action to use a compact icon button, but bounds were {pickCover.width:0.##}x{pickCover.height:0.##}.");
+                Assert.True(playPreview.width <= 30 && playPreview.height <= 30, $"Expected the preview playback action to be rendered as a compact icon button, but bounds were {playPreview.width:0.##}x{playPreview.height:0.##}.");
+                Assert.True(createPreview.width > playPreview.width * 5, $"Expected the preview creation action to dominate its row, but button widths were {createPreview.width:0.##} and {playPreview.width:0.##}.");
+                Assert.True(coverImage.width >= 150 && coverImage.height >= 150, $"Expected cover artwork to be rendered at a clearly previewable size, but bounds were {coverImage.width:0.##}x{coverImage.height:0.##}.");
+
+                Assert.Equal("0", driver.GetText(NotesStatsAllId));
+                Assert.Equal("0", driver.GetText(NotesStatsSelectedId));
+                Assert.Equal("0", driver.GetText(NotesStatsSingleId));
+                Assert.Equal("0", driver.GetText(NotesStatsDoubleId));
+                Assert.Equal("0", driver.GetText(NotesStatsTriplePlusId));
+
+                driver.ClickButton(ColumnStatsButtonId);
+                Assert.Equal("0", driver.GetText(ColumnStatsValue1Id));
+                Assert.Equal("0", driver.GetText(ColumnStatsValue2Id));
+                Assert.Equal("0", driver.GetText(ColumnStatsValue3Id));
+                Assert.Equal("0", driver.GetText(ColumnStatsValue4Id));
+                Assert.Equal("0%", driver.GetText(ColumnStatsPercentage1Id));
+                Assert.Equal("0%", driver.GetText(ColumnStatsPercentage2Id));
+                Assert.Equal("0%", driver.GetText(ColumnStatsPercentage3Id));
+                Assert.Equal("0%", driver.GetText(ColumnStatsPercentage4Id));
+
+                Assert.True(driver.IsVisible(NavWaveformImageId));
+            });
+        }
+
+        [Fact]
+        public void FixtureMapShowsExpectedEditorShellControlsAndVisibleButtonText() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                Assert.Equal("Create Song Preview", driver.GetText(CreatePreviewButtonId));
+                Assert.Equal("Edit Song Timing", driver.GetText(ChangeBpmButtonId));
+                Assert.Equal("Customize Navigation Bar", driver.GetText(CustomizeNavBarButtonId));
+                Assert.Equal("3", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("12", driver.GetText(NoteSpeedTextBoxId));
+                Assert.Equal("Auto", driver.GetText(BronzeMedalDistanceTextBoxId));
+                Assert.Equal("Auto", driver.GetText(SilverMedalDistanceTextBoxId));
+                Assert.Equal("Auto", driver.GetText(GoldMedalDistanceTextBoxId));
+
+                Assert.True(driver.IsVisible(ScrollSpectrogramId));
+                Assert.True(driver.IsVisible(NavWaveformImageId));
+                Assert.True(driver.IsVisible(ScrollEditorId));
+                Assert.True(driver.IsVisible(SelectedBeatLabelId));
+                Assert.True(driver.IsVisible(Drum0Id));
+                Assert.True(driver.IsVisible(Drum1Id));
+                Assert.True(driver.IsVisible(Drum2Id));
+                Assert.True(driver.IsVisible(Drum3Id));
+            });
+        }
+
+        [Fact]
         public void FixtureDifficultyValuesAreLoadedIntoDifficultyFields() {
             RunOpenedFixtureMapTest((driver, _) => {
                 Assert.Equal("3", driver.GetText(DifficultyNumberTextBoxId));
@@ -157,16 +269,136 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void MainWindowRegionsAndPlaybackControlsArePositionedForEditingWorkflow() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var songName = driver.GetElementBounds(SongNameTextBoxId);
+                var navWaveform = driver.GetElementBounds(NavWaveformImageId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+                var songPlayer = driver.GetElementBounds(SongPlayerButtonId);
+                var songPosition = driver.GetElementBounds(SongPositionTextId);
+                var songProgress = driver.GetElementBounds(SongProgressSliderId);
+
+                Assert.True(RightEdge(songName) < navWaveform.left, $"Expected metadata fields to sit left of the navigation waveform, but song name right edge was {RightEdge(songName):0.##} and waveform left edge was {navWaveform.left:0.##}.");
+                Assert.True(RightEdge(navWaveform) < difficultyNumber.left, $"Expected the navigation waveform to sit left of the difficulty controls, but waveform right edge was {RightEdge(navWaveform):0.##} and difficulty field left edge was {difficultyNumber.left:0.##}.");
+                Assert.True(navWaveform.height > navWaveform.width * 2.5, $"Expected the navigation waveform to render as a tall vertical strip, but width={navWaveform.width:0.##} and height={navWaveform.height:0.##}.");
+                Assert.True(RightEdge(songPlayer) < songPosition.left, $"Expected the play button to sit before the song position text, but button right edge was {RightEdge(songPlayer):0.##} and position left edge was {songPosition.left:0.##}.");
+                Assert.True(RightEdge(songPosition) < songProgress.left, $"Expected the song position text to sit before the progress slider, but position right edge was {RightEdge(songPosition):0.##} and slider left edge was {songProgress.left:0.##}.");
+                Assert.True(Math.Abs(CenterY(songPlayer) - CenterY(songProgress)) < 45, $"Expected playback controls to share a horizontal row, but center Y values were {CenterY(songPlayer):0.##} and {CenterY(songProgress):0.##}.");
+                Assert.True(songProgress.width > songPlayer.width * 4, $"Expected the progress slider to dominate the playback row, but slider width={songProgress.width:0.##} and play button width={songPlayer.width:0.##}.");
+            });
+        }
+
+        [Fact]
+        public void MainWindowEditorViewportAndNavigationStripUseExpectedEditingProportions() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var songName = driver.GetElementBounds(SongNameTextBoxId);
+                var scrollEditor = driver.GetElementBounds(ScrollEditorId);
+                var navWaveform = driver.GetElementBounds(NavWaveformImageId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+
+                Assert.True(RightEdge(songName) < scrollEditor.left, $"Expected the editor viewport to sit to the right of the metadata sidebar, but song name right edge was {RightEdge(songName):0.##} and editor left edge was {scrollEditor.left:0.##}.");
+                Assert.True(RightEdge(scrollEditor) <= navWaveform.left, $"Expected the editor viewport to sit left of the navigation waveform strip, but editor right edge was {RightEdge(scrollEditor):0.##} and strip left edge was {navWaveform.left:0.##}.");
+                Assert.True(RightEdge(navWaveform) < difficultyNumber.left, $"Expected the navigation waveform strip to sit left of the difficulty controls, but strip right edge was {RightEdge(navWaveform):0.##} and difficulty field left edge was {difficultyNumber.left:0.##}.");
+                Assert.True(scrollEditor.width >= 330, $"Expected the editor viewport to stay wide enough for four note columns, but width was {scrollEditor.width:0.##}.");
+                Assert.True(scrollEditor.height >= 520, $"Expected the editor viewport to stay tall enough for scrolling workflow, but height was {scrollEditor.height:0.##}.");
+                Assert.True(scrollEditor.height > scrollEditor.width * 1.15, $"Expected the editor viewport to read as a tall mapping surface, but width={scrollEditor.width:0.##} and height={scrollEditor.height:0.##}.");
+                Assert.True(navWaveform.height >= scrollEditor.height * 0.8, $"Expected the navigation waveform strip to span most of the editor height, but strip height was {navWaveform.height:0.##} and editor height was {scrollEditor.height:0.##}.");
+                Assert.True(navWaveform.height > navWaveform.width * 2.5, $"Expected the navigation waveform strip to stay vertical and narrow, but width={navWaveform.width:0.##} and height={navWaveform.height:0.##}.");
+            });
+        }
+
+        [Fact]
+        public void MainWindowEditorShellKeepsSpectrogramDrumLaneAndFooterInExpectedPlaces() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var scrollEditor = driver.GetElementBounds(ScrollEditorId);
+                var navWaveform = driver.GetElementBounds(NavWaveformImageId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+                var selectedBeat = driver.GetElementBounds(SelectedBeatLabelId);
+                var changeBpmButton = driver.GetElementBounds(ChangeBpmButtonId);
+                var drum0 = driver.GetElementBounds(Drum0Id);
+                var drum1 = driver.GetElementBounds(Drum1Id);
+                var drum2 = driver.GetElementBounds(Drum2Id);
+                var drum3 = driver.GetElementBounds(Drum3Id);
+
+                Assert.True(RightEdge(scrollEditor) <= navWaveform.left, $"Expected the editor viewport to sit left of the navigation waveform strip, but editor right edge was {RightEdge(scrollEditor):0.##} and strip left edge was {navWaveform.left:0.##}.");
+                Assert.True(RightEdge(navWaveform) < difficultyNumber.left, $"Expected the navigation waveform strip to sit left of the difficulty controls, but strip right edge was {RightEdge(navWaveform):0.##} and difficulty field left edge was {difficultyNumber.left:0.##}.");
+
+                Assert.True(drum0.left < drum1.left && drum1.left < drum2.left && drum2.left < drum3.left, "Expected the four drum targets to progress left-to-right across the beat scan lane.");
+                Assert.True(CenterY(drum0) > scrollEditor.top + scrollEditor.height * 0.7, $"Expected the first drum target to anchor near the bottom of the editor viewport, but its center Y was {CenterY(drum0):0.##} and the viewport bottom region started at {(scrollEditor.top + scrollEditor.height * 0.7):0.##}.");
+                Assert.True(CenterY(drum3) > scrollEditor.top + scrollEditor.height * 0.7, $"Expected the fourth drum target to anchor near the bottom of the editor viewport, but its center Y was {CenterY(drum3):0.##} and the viewport bottom region started at {(scrollEditor.top + scrollEditor.height * 0.7):0.##}.");
+                Assert.True(selectedBeat.top > changeBpmButton.top + changeBpmButton.height, $"Expected the selected-beat footer to be docked below the editor settings content, but footer top was {selectedBeat.top:0.##} and the first editor-settings button bottom was {(changeBpmButton.top + changeBpmButton.height):0.##}.");
+            });
+        }
+
+        [Fact]
+        public void FullWindowLayoutKeepsSidebarsAndEditorChromeInsideMainWindowBounds() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                driver.ResizeMainWindow(1900, 1000);
+                driver.WaitForIdle(TimeSpan.FromMilliseconds(700));
+
+                var mainWindow = driver.GetElementBounds(MainWindowId);
+                var songName = driver.GetElementBounds(SongNameTextBoxId);
+                var scrollSpectrogram = driver.GetElementBounds(ScrollSpectrogramId);
+                var scrollEditor = driver.GetElementBounds(ScrollEditorId);
+                var navWaveform = driver.GetElementBounds(NavWaveformImageId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+
+                Assert.True(songName.left >= mainWindow.left + 5, $"Expected the left sidebar field to remain inside the window bounds, but song name left edge was {songName.left:0.##} for window left edge {mainWindow.left:0.##}.");
+                Assert.True(RightEdge(songName) <= scrollSpectrogram.left + 2, $"Expected the left sidebar fields to remain clipped within their dock and clear of the spectrogram, but song name right edge was {RightEdge(songName):0.##} and spectrogram left edge was {scrollSpectrogram.left:0.##}.");
+                Assert.True(RightEdge(scrollSpectrogram) <= scrollEditor.left + 2, $"Expected the spectrogram to stay immediately left of the editor viewport, but spectrogram right edge was {RightEdge(scrollSpectrogram):0.##} and editor left edge was {scrollEditor.left:0.##}.");
+                Assert.True(RightEdge(scrollEditor) <= navWaveform.left + 1, $"Expected the editor viewport to remain left of the navigation strip, but editor right edge was {RightEdge(scrollEditor):0.##} and strip left edge was {navWaveform.left:0.##}.");
+                Assert.True(RightEdge(navWaveform) < difficultyNumber.left, $"Expected the navigation strip to remain left of the right sidebar fields, but strip right edge was {RightEdge(navWaveform):0.##} and difficulty field left edge was {difficultyNumber.left:0.##}.");
+                Assert.True(RightEdge(difficultyNumber) <= RightEdge(mainWindow) - 10, $"Expected the right sidebar field to remain inside the window bounds, but difficulty field right edge was {RightEdge(difficultyNumber):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
+                Assert.True(scrollEditor.width >= 450, $"Expected the editor viewport to remain comfortably wide at full window size, but width was {scrollEditor.width:0.##}.");
+                Assert.True(scrollEditor.height >= 650, $"Expected the editor viewport to remain comfortably tall at full window size, but height was {scrollEditor.height:0.##}.");
+                Assert.True(scrollSpectrogram.width >= 20, $"Expected the spectrogram strip to remain visibly useful at full window size, but width was {scrollSpectrogram.width:0.##}.");
+                Assert.True(scrollSpectrogram.width < scrollEditor.width, $"Expected the spectrogram strip to stay narrower than the main editor viewport, but spectrogram width was {scrollSpectrogram.width:0.##} and editor width was {scrollEditor.width:0.##}.");
+                Assert.True(navWaveform.width >= 20 && navWaveform.width <= 100, $"Expected the navigation strip to stay narrow like WPF, but width was {navWaveform.width:0.##}.");
+            });
+        }
+
+        [Fact]
+        public void SidebarsKeepComfortablePaddingInsideDockBounds() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var mainWindow = driver.GetElementBounds(MainWindowId);
+                var songName = driver.GetElementBounds(SongNameTextBoxId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+
+                Assert.True(songName.left >= mainWindow.left + 10, $"Expected left sidebar content to keep at least 10 px of inner padding, but song name left edge was {songName.left:0.##} for window left edge {mainWindow.left:0.##}.");
+                Assert.True(RightEdge(difficultyNumber) <= RightEdge(mainWindow) - 14, $"Expected right sidebar content to keep visible inner padding, but difficulty field right edge was {RightEdge(difficultyNumber):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
+            });
+        }
+
+        [Fact]
+        public void NavigationWaveformClicksSeekTopToSongEndAndBottomToSongStart() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var durationMs = ParseTimeTextToMilliseconds(driver.GetText(SongDurationTextId));
+
+                driver.ClickWithinElement(NavWaveformImageId, 0.5, 0.05);
+                driver.WaitForIdle();
+                var nearTopValue = driver.GetSliderValue(SongProgressSliderId);
+
+                driver.ClickWithinElement(NavWaveformImageId, 0.5, 0.95);
+                driver.WaitForIdle();
+                var nearBottomValue = driver.GetSliderValue(SongProgressSliderId);
+
+                Assert.True(nearTopValue >= durationMs * 0.75, $"Expected clicking near the top of the navigation waveform to seek close to song end, but progress was {nearTopValue:0.##}ms for duration {durationMs:0.##}ms.");
+                Assert.True(nearBottomValue <= durationMs * 0.25, $"Expected clicking near the bottom of the navigation waveform to seek close to song start, but progress was {nearBottomValue:0.##}ms for duration {durationMs:0.##}ms.");
+                Assert.True(nearTopValue > nearBottomValue, $"Expected top-of-waveform seeks to land after bottom-of-waveform seeks, but values were {nearTopValue:0.##}ms and {nearBottomValue:0.##}ms.");
+            });
+        }
+
+        [Fact]
         public void PlaybackViaButtonDisablesAndReenablesTimelineAndDifficultyControls() {
             RunOpenedFixtureMapTest((driver, _) => {
                 var previewButtonInitiallyEnabled = driver.IsEnabled(PreviewPlayButtonId);
 
                 driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
-                Assert.False(driver.IsEnabled(SongTempoSliderId));
-                Assert.False(driver.IsEnabled(SongProgressSliderId));
-                Assert.False(driver.IsEnabled(DifficultyButton0Id));
-                Assert.False(driver.IsEnabled(PreviewPlayButtonId));
+                Assert.False(driver.IsEnabled(SongTempoSliderId), driver.GetTestLog());
+                Assert.False(driver.IsEnabled(SongProgressSliderId), driver.GetTestLog());
+                Assert.False(driver.IsEnabled(DifficultyButton0Id), driver.GetTestLog());
+                Assert.False(driver.IsEnabled(PreviewPlayButtonId), driver.GetTestLog());
 
                 driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
                 driver.WaitForIdle();
@@ -183,13 +415,32 @@ namespace Edda.Wpf.UI.Tests {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.SendKeyboardShortcut("Space");
                 driver.WaitForIdle();
-                Assert.False(driver.IsEnabled(SongTempoSliderId));
-                Assert.False(driver.IsEnabled(SongProgressSliderId));
+                Assert.False(driver.IsEnabled(SongTempoSliderId), driver.GetTestLog());
+                Assert.False(driver.IsEnabled(SongProgressSliderId), driver.GetTestLog());
 
                 driver.SendKeyboardShortcut("Space");
                 driver.WaitForIdle();
                 Assert.True(driver.IsEnabled(SongTempoSliderId));
                 Assert.True(driver.IsEnabled(SongProgressSliderId));
+            });
+        }
+
+        [Fact]
+        public void PlaybackAdvancesTimelineAndBeatReadoutWithinHalfASecond() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var initialProgress = driver.GetSliderValue(SongProgressSliderId);
+
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
+
+                var advanced = WaitForPlaybackAdvance(driver, initialProgress, out var updatedProgress);
+
+                driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
+                driver.WaitForIdle();
+
+                Assert.True(advanced, string.IsNullOrWhiteSpace(driver.GetTestLog())
+                    ? $"Expected playback to advance the timeline quickly, but progress stayed at {updatedProgress:0.##}."
+                    : driver.GetTestLog());
+                Assert.True(updatedProgress >= initialProgress + 150, $"Expected playback slider progress to advance by at least 150ms, but it changed from {initialProgress:0.##} to {updatedProgress:0.##}.");
             });
         }
 
@@ -354,6 +605,30 @@ namespace Edda.Wpf.UI.Tests {
                 Assert.False(driver.IsVisible(DifficultyButton2Id));
                 Assert.True(driver.IsEnabled(AddDifficultyButtonId));
                 Assert.False(driver.IsEnabled(DeleteDifficultyButtonId));
+            });
+        }
+
+        [Fact]
+        public void DifficultySlotsStayAnchoredWhenDifficultyCountChanges() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var beforeButton0 = driver.GetElementBounds(DifficultyButton0Id);
+                var beforeAdd = driver.GetElementBounds(AddDifficultyButtonId);
+                var beforeDelete = driver.GetElementBounds(DeleteDifficultyButtonId);
+
+                driver.ClickButton(AddDifficultyButtonId);
+                driver.InvokeCommand(DialogNoCommandId);
+                driver.WaitForIdle();
+
+                var afterButton0 = driver.GetElementBounds(DifficultyButton0Id);
+                var afterButton1 = driver.GetElementBounds(DifficultyButton1Id);
+                var afterAdd = driver.GetElementBounds(AddDifficultyButtonId);
+                var afterDelete = driver.GetElementBounds(DeleteDifficultyButtonId);
+
+                Assert.InRange(Math.Abs(afterButton0.left - beforeButton0.left), 0, 3);
+                Assert.InRange(Math.Abs(afterAdd.left - beforeAdd.left), 0, 3);
+                Assert.InRange(Math.Abs(afterDelete.left - beforeDelete.left), 0, 3);
+                Assert.True(afterButton1.left > afterButton0.left, $"Expected added difficulty slots to flow left-to-right in stable positions, but difficulty 1 left edge was {afterButton1.left:0.##} and difficulty 0 left edge was {afterButton0.left:0.##}.");
+                Assert.True(afterAdd.left > afterButton1.left, $"Expected +/- actions to stay docked to the right of the difficulty slots, but add button left edge was {afterAdd.left:0.##} and difficulty 1 left edge was {afterButton1.left:0.##}.");
             });
         }
 
@@ -742,6 +1017,28 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void OpeningFixtureMapCreatesSpectrogramCachePngsBesideMap() {
+            var driver = new WpfUIDriver();
+            string? mapFolder = null;
+
+            try {
+                mapFolder = CreateFixtureMapCopy();
+                var cacheFolder = Path.Combine(mapFolder, CacheFolderName);
+                SafeDeleteDirectory(cacheFolder);
+
+                LaunchAndOpenMap(driver, mapFolder);
+                driver.WaitForIdle(TimeSpan.FromMilliseconds(500));
+
+                Assert.True(
+                    WaitForFileCount(() => Directory.Exists(cacheFolder) ? Directory.GetFiles(cacheFolder, "*.png").Length : 0, minimumCount: 1),
+                    $"Expected spectrogram rendering to create at least one cached PNG beside the map, but '{cacheFolder}' stayed empty.");
+            } finally {
+                driver.Shutdown();
+                SafeDeleteDirectory(mapFolder);
+            }
+        }
+
+        [Fact]
         public void ClearCacheMenuDeletesCacheFolderWhenConfirmed() {
             RunOpenedFixtureMapTest((driver, mapFolder) => {
                 var cacheFolder = Path.Combine(mapFolder, CacheFolderName);
@@ -920,6 +1217,42 @@ namespace Edda.Wpf.UI.Tests {
 
                 Assert.Equal(updatedArtist, driver.GetText(ArtistNameTextBoxId));
                 Assert.Equal(updatedMapper, driver.GetText(MapperNameTextBoxId));
+            } finally {
+                driver.Shutdown();
+                SafeDeleteDirectory(mapFolder);
+            }
+        }
+
+        [Fact]
+        public void SavingRenamedSongUpdatesRecentMapDisplayWhenReturningToStartWindow() {
+            var driver = new WpfUIDriver();
+            string? mapFolder = null;
+
+            try {
+                mapFolder = LaunchAndOpenFixtureMap(driver);
+                var updatedSongName = $"Recent Entry {Guid.NewGuid():N}";
+                var normalizedMapFolder = Path.GetFullPath(mapFolder);
+
+                driver.SetText(SongNameTextBoxId, updatedSongName);
+                CommitTextboxEdits(driver);
+                driver.SendKeyboardShortcut("Ctrl+S");
+                driver.WaitForIdle();
+
+                driver.SendKeyboardShortcut("Ctrl+W");
+                driver.WaitForStartWindow();
+
+                Assert.True(driver.IsVisible(StartWindowId));
+                Assert.Equal(1, driver.GetListItemCount(StartupRecentMapsListId));
+                Assert.True(driver.ContainsText(updatedSongName));
+                Assert.True(driver.ContainsText(normalizedMapFolder));
+
+                driver.ClickListItemContainingText(StartupRecentMapsListId, normalizedMapFolder);
+                driver.WaitForMainWindow();
+                driver.SendKeyboardShortcut("Ctrl+W");
+                driver.WaitForStartWindow();
+
+                Assert.Equal(1, driver.GetListItemCount(StartupRecentMapsListId));
+                Assert.True(driver.ContainsText(updatedSongName));
             } finally {
                 driver.Shutdown();
                 SafeDeleteDirectory(mapFolder);
@@ -1255,6 +1588,56 @@ namespace Edda.Wpf.UI.Tests {
         private static void MarkCurrentMapDirty(WpfUIDriver driver) {
             driver.SetText(SongNameTextBoxId, $"{driver.GetText(SongNameTextBoxId)}*");
             CommitTextboxEdits(driver);
+        }
+
+        private static double CenterY((double left, double top, double width, double height) bounds) {
+            return bounds.top + bounds.height / 2;
+        }
+
+        private static double RightEdge((double left, double top, double width, double height) bounds) {
+            return bounds.left + bounds.width;
+        }
+
+        private static double BottomEdge((double left, double top, double width, double height) bounds) {
+            return bounds.top + bounds.height;
+        }
+
+        private static double ParseTimeTextToMilliseconds(string value) {
+            if (!TimeSpan.TryParseExact(value, @"m\:ss", CultureInfo.InvariantCulture, out var parsed) &&
+                !TimeSpan.TryParseExact(value, @"mm\:ss", CultureInfo.InvariantCulture, out parsed)) {
+                throw new InvalidOperationException($"Expected a time string in m:ss format, but got '{value}'.");
+            }
+
+            return parsed.TotalMilliseconds;
+        }
+
+        private static bool WaitForPlaybackAdvance(WpfUIDriver driver, double initialProgress, out double updatedProgress) {
+            var timeout = Stopwatch.StartNew();
+            updatedProgress = initialProgress;
+
+            while (timeout.Elapsed < TimeSpan.FromMilliseconds(750)) {
+                Thread.Sleep(75);
+                updatedProgress = driver.GetSliderValue(SongProgressSliderId);
+                if (updatedProgress >= initialProgress + 150) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool WaitForFileCount(Func<int> getCount, int minimumCount) {
+            var timeout = Stopwatch.StartNew();
+
+            while (timeout.Elapsed < TimeSpan.FromSeconds(10)) {
+                if (getCount() >= minimumCount) {
+                    return true;
+                }
+
+                Thread.Sleep(100);
+            }
+
+            return false;
         }
     }
 }

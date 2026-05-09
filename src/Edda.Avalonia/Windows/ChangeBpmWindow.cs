@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -25,11 +26,12 @@ internal sealed class ChangeBpmWindow : Window {
 
     public ChangeBpmWindow(MainWindow mainWindow) {
         this.mainWindow = mainWindow;
-        Title = "Change BPM";
-        Width = 420;
-        Height = 340;
+        Title = "Timing Settings";
+        Width = 300;
+        Height = 370;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Background = new SolidColorBrush(Color.Parse("#D4D0C8"));
         AutomationHelper.SetAutomationId(this, "ChangeBpmWindow");
         Content = BuildRoot();
         Closing += (_, _) => ApplyLocalChanges(forceSaveToMap: true);
@@ -40,55 +42,47 @@ internal sealed class ChangeBpmWindow : Window {
         var root = new DockPanel();
 
         var header = new Border {
-            Padding = new Thickness(14),
-            Background = new LinearGradientBrush {
-                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-                GradientStops = new GradientStops {
-                    new GradientStop(Color.Parse("#F7F9FD"), 0),
-                    new GradientStop(Color.Parse("#DCE5F5"), 1)
-                }
-            }
+            BorderBrush = new SolidColorBrush(Color.Parse("#5B6475")),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Background = CreatePanelGradient()
         };
         DockPanel.SetDock(header, Dock.Top);
         var headerRow = new StackPanel {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8
+            Orientation = Orientation.Horizontal
         };
         headerRow.Children.Add(new TextBlock {
             Text = "Global BPM:",
+            Margin = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(10, 10, 0, 10),
             FontSize = 16,
-            FontWeight = FontWeight.Bold
+            FontWeight = FontWeight.Bold,
+            FontFamily = new FontFamily("Bahnschrift")
         });
         lblGlobalBPM = AutomationHelper.WithAutomationId(new TextBlock {
             Name = "lblGlobalBPM",
-            FontSize = 16
+            FontSize = 14,
+            Padding = new Thickness(5, 10, 10, 10),
+            VerticalAlignment = VerticalAlignment.Center
         }, "lblGlobalBPM");
         headerRow.Children.Add(lblGlobalBPM);
         header.Child = headerRow;
         root.Children.Add(header);
 
         var footer = new Border {
-            Padding = new Thickness(12),
-            Background = new LinearGradientBrush {
-                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-                GradientStops = new GradientStops {
-                    new GradientStop(Color.Parse("#F7F9FD"), 0),
-                    new GradientStop(Color.Parse("#DCE5F5"), 1)
-                }
-            }
+            BorderBrush = new SolidColorBrush(Color.Parse("#5B6475")),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Background = CreatePanelGradient()
         };
         DockPanel.SetDock(footer, Dock.Bottom);
         var footerRow = new Grid {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            ColumnSpacing = 10
+            Margin = new Thickness(15, 10, 10, 10)
         };
         var addButton = AutomationHelper.WithAutomationId(new Button {
             Name = "dataBPMChange_Add",
             Content = "Add Timing Change",
             HorizontalAlignment = HorizontalAlignment.Left,
-            MinWidth = 132
+            Width = 145
         }, "dataBPMChange_Add");
         addButton.Click += (_, _) => AddNewTimingChange();
         footerRow.Children.Add(addButton);
@@ -96,7 +90,7 @@ internal sealed class ChangeBpmWindow : Window {
             Name = "btnExit",
             Content = "Exit",
             HorizontalAlignment = HorizontalAlignment.Right,
-            MinWidth = 72
+            Width = 60
         }, "btnExit");
         exitButton.Click += (_, _) => Close();
         Grid.SetColumn(exitButton, 1);
@@ -105,12 +99,15 @@ internal sealed class ChangeBpmWindow : Window {
         root.Children.Add(footer);
 
         var body = new StackPanel {
-            Margin = new Thickness(14),
+            Margin = new Thickness(15),
             Spacing = 10
         };
         body.Children.Add(new TextBlock {
             Text = "Timing Changes:",
-            FontWeight = FontWeight.Bold
+            Padding = new Thickness(0, 0, 0, 5),
+            FontWeight = FontWeight.Bold,
+            FontFamily = new FontFamily("Bahnschrift"),
+            FontSize = 14
         });
 
         dataGridRoot = AutomationHelper.WithAutomationId(new ContentControl {
@@ -123,7 +120,8 @@ internal sealed class ChangeBpmWindow : Window {
             BorderBrush = new SolidColorBrush(Color.Parse("#C7D2E7")),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10)
+            Padding = new Thickness(10),
+            Height = 200
         };
 
         var gridContainer = new StackPanel {
@@ -133,7 +131,11 @@ internal sealed class ChangeBpmWindow : Window {
         gridRowsHost = new StackPanel {
             Spacing = 6
         };
-        gridContainer.Children.Add(gridRowsHost);
+        gridContainer.Children.Add(new ScrollViewer {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = gridRowsHost
+        });
         gridBorder.Child = gridContainer;
         dataGridRoot.Content = gridBorder;
         body.Children.Add(dataGridRoot);
@@ -202,7 +204,10 @@ internal sealed class ChangeBpmWindow : Window {
         var row = AutomationHelper.WithAutomationId(new Grid {
             Name = $"dataBPMChange_Row{rowIndex}",
             ColumnDefinitions = new ColumnDefinitions("48,*,*,*"),
-            ColumnSpacing = 8
+            ColumnSpacing = 8,
+            Background = selectedRowIndex == rowIndex
+                ? new SolidColorBrush(Color.Parse("#E6F1FF"))
+                : Brushes.Transparent
         }, $"dataBPMChange_Row{rowIndex}");
 
         var selectButton = AutomationHelper.WithAutomationId(new Button {
@@ -227,7 +232,8 @@ internal sealed class ChangeBpmWindow : Window {
     Control CreateCell(int rowIndex, int columnIndex, string text) {
         var textBox = AutomationHelper.WithAutomationId(new TextBox {
             Name = $"dataBPMChange_Cell{rowIndex}_{columnIndex}",
-            Text = text
+            Text = text,
+            HorizontalContentAlignment = HorizontalAlignment.Left
         }, $"dataBPMChange_Cell{rowIndex}_{columnIndex}");
         textBox.GotFocus += (_, _) => selectedRowIndex = rowIndex;
         textBox.LostFocus += (_, _) => {
@@ -314,11 +320,7 @@ internal sealed class ChangeBpmWindow : Window {
         try {
             bpmChanges.Sort((left, right) => left.globalBeat.CompareTo(right.globalBeat));
             RefreshRows();
-
-            var hasDuplicateBeats = HasDuplicateBeats();
-            if (forceSaveToMap || !hasDuplicateBeats) {
-                SaveLocalChangesToMap();
-            }
+            SaveLocalChangesToMap();
         } finally {
             isPersistingChanges = false;
         }
@@ -337,16 +339,6 @@ internal sealed class ChangeBpmWindow : Window {
         return new BPMChange(change.globalBeat, change.BPM, change.gridDivision);
     }
 
-    bool HasDuplicateBeats() {
-        for (var index = 1; index < bpmChanges.Count; index++) {
-            if (Helper.DoubleApproxEqual(bpmChanges[index - 1].globalBeat, bpmChanges[index].globalBeat)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     void SaveLocalChangesToMap() {
         var difficulty = mainWindow.MapEditorInstance?.currentMapDifficulty;
         if (difficulty == null) {
@@ -356,5 +348,16 @@ internal sealed class ChangeBpmWindow : Window {
         difficulty.bpmChanges = new SortedSet<BPMChange>(bpmChanges.Select(CloneBpmChange));
         difficulty.MarkDirty();
         mainWindow.RefreshEditorGridFromToolWindow();
+    }
+
+    static LinearGradientBrush CreatePanelGradient() {
+        return new LinearGradientBrush {
+            StartPoint = new RelativePoint(0.5, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0.5, 1, RelativeUnit.Relative),
+            GradientStops = new GradientStops {
+                new GradientStop(Color.Parse("#F2F4F7"), 0),
+                new GradientStop(Color.Parse("#D4D0C8"), 1)
+            }
+        };
     }
 }

@@ -405,7 +405,10 @@ public sealed partial class MainWindow {
     Control BuildStatsPanel() {
         var panel = new StackPanel {
             Spacing = 0,
-            Margin = new Thickness(10, 0, 5, 0)
+            Margin = new Thickness(10, 0, 12, 0),
+            Width = SidebarDockWidth - 22,
+            MaxWidth = SidebarDockWidth - 22,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
         notesStatsAll = CreateStatsText("notesStatsAll");
@@ -415,6 +418,7 @@ public sealed partial class MainWindow {
         notesStatsTriplePlusLabel = AutomationHelper.WithAutomationId(new TextBlock {
             Name = "notesStatsTriplePlusLabel",
             Text = "Triple+",
+            FontSize = 9.25,
             VerticalAlignment = VerticalAlignment.Center
         }, "notesStatsTriplePlusLabel");
         notesStatsTriplePlus = CreateStatsText("notesStatsTriplePlus");
@@ -433,8 +437,8 @@ public sealed partial class MainWindow {
         npsStats4Beat = CreateStatsText("npsStats4Beat");
 
         var notesGrid = BuildCompactStatsGrid(
-            new[] { 0.9, 0.85, 0.9, 1.0, 0.95 },
-            new Thickness(2.5, 1),
+            new[] { 0.75, 0.95, 1.0, 1.05, 1.25 },
+            new Thickness(2, 1),
             (CreateStatsLabel("All"), notesStatsAll),
             (CreateStatsLabel("Select"), notesStatsSelected),
             (CreateStatsLabel("Single"), notesStatsSingle),
@@ -463,6 +467,11 @@ public sealed partial class MainWindow {
         var expander = AutomationHelper.WithAutomationId(new Expander {
             Name = automationId,
             IsExpanded = isExpanded,
+            Width = SidebarDockWidth - 22,
+            MaxWidth = SidebarDockWidth - 22,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            ClipToBounds = true,
             Header = new TextBlock {
                 Text = headerText,
                 FontWeight = FontWeight.DemiBold
@@ -482,7 +491,8 @@ public sealed partial class MainWindow {
 
     static Grid BuildCompactStatsGrid(double[] columnWeights, Thickness cellPadding, params (TextBlock label, TextBlock value)[] columns) {
         var grid = new Grid {
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
         for (var index = 0; index < columns.Length; index++) {
@@ -523,7 +533,8 @@ public sealed partial class MainWindow {
 
     Grid BuildCompactNpsGrid() {
         var grid = new Grid {
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
@@ -534,17 +545,17 @@ public sealed partial class MainWindow {
         grid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(40)));
 
         var cellPadding = new Thickness(5, 1);
-        AddCompactStatsCell(grid, 0, 0, new TextBlock { Text = "Song:", VerticalAlignment = VerticalAlignment.Center }, cellPadding);
+        AddCompactStatsCell(grid, 0, 0, new TextBlock { Text = "Song:", FontSize = 9.25, VerticalAlignment = VerticalAlignment.Center }, cellPadding);
         AddCompactStatsCell(grid, 0, 1, npsStatsSong, cellPadding);
-        AddCompactStatsCell(grid, 0, 2, new TextBlock { Text = "16-beat:", VerticalAlignment = VerticalAlignment.Center }, cellPadding);
+        AddCompactStatsCell(grid, 0, 2, new TextBlock { Text = "16-beat:", FontSize = 9.25, VerticalAlignment = VerticalAlignment.Center }, cellPadding);
         AddCompactStatsCell(grid, 0, 3, npsStats16Beat, cellPadding);
 
-        AddCompactStatsCell(grid, 1, 0, new TextBlock { Text = "Mapped:", VerticalAlignment = VerticalAlignment.Center }, cellPadding);
+        AddCompactStatsCell(grid, 1, 0, new TextBlock { Text = "Mapped:", FontSize = 9.25, VerticalAlignment = VerticalAlignment.Center }, cellPadding);
         AddCompactStatsCell(grid, 1, 1, npsStatsMapped, cellPadding);
-        AddCompactStatsCell(grid, 1, 2, new TextBlock { Text = "8-beat:", VerticalAlignment = VerticalAlignment.Center }, cellPadding);
+        AddCompactStatsCell(grid, 1, 2, new TextBlock { Text = "8-beat:", FontSize = 9.25, VerticalAlignment = VerticalAlignment.Center }, cellPadding);
         AddCompactStatsCell(grid, 1, 3, npsStats8Beat, cellPadding);
 
-        AddCompactStatsCell(grid, 2, 2, new TextBlock { Text = "4-beat:", VerticalAlignment = VerticalAlignment.Center }, cellPadding);
+        AddCompactStatsCell(grid, 2, 2, new TextBlock { Text = "4-beat:", FontSize = 9.25, VerticalAlignment = VerticalAlignment.Center }, cellPadding);
         AddCompactStatsCell(grid, 2, 3, npsStats4Beat, cellPadding);
 
         var separator = new Border {
@@ -570,6 +581,7 @@ public sealed partial class MainWindow {
     static TextBlock CreateStatsLabel(string text) {
         return new TextBlock {
             Text = text,
+            FontSize = 9.25,
             VerticalAlignment = VerticalAlignment.Center
         };
     }
@@ -578,6 +590,7 @@ public sealed partial class MainWindow {
         return AutomationHelper.WithAutomationId(new TextBlock {
             Name = automationId,
             Text = "0",
+            FontSize = 9.25,
             VerticalAlignment = VerticalAlignment.Center
         }, automationId);
     }
@@ -607,7 +620,6 @@ public sealed partial class MainWindow {
         SetTextForeground(notesStatsTriplePlus, triplePlusNotes > 0 ? Editor.Stats.WarningColour : Editor.Stats.Colour);
         notesStatsTriplePlusLabel.FontWeight = triplePlusWeight;
         notesStatsTriplePlus.FontWeight = triplePlusWeight;
-        UpdateDifficultyPrediction();
     }
 
     void RefreshEditorSurface() {

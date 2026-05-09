@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>..\Edda.Core\Resources\AppIcon.ico</ApplicationIcon>
     <RootNamespace>Edda.Avalonia</RootNamespace>
   </PropertyGroup>
 
@@ -23,6 +24,10 @@
     </Content>
 
     <Content Include="..\Edda.Core\Resources\*.wav" Link="Resources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\AppIcon.ico" Link="Resources\AppIcon.ico">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
 

@@ -71,6 +71,9 @@ namespace Edda.Wpf.UI.Tests {
         private const string DifficultyButton0Id = "btnChangeDifficulty0";
         private const string DifficultyButton1Id = "btnChangeDifficulty1";
         private const string DifficultyButton2Id = "btnChangeDifficulty2";
+        private const string DifficultyRankLabel1Id = "lblDifficultyRank1";
+        private const string DifficultyRankLabel2Id = "lblDifficultyRank2";
+        private const string DifficultyRankLabel3Id = "lblDifficultyRank3";
         private const string AddDifficultyButtonId = "btnAddDifficulty";
         private const string DeleteDifficultyButtonId = "btnDeleteDifficulty";
         private const string DifficultyNumberTextBoxId = "txtDifficultyNumber";
@@ -82,6 +85,7 @@ namespace Edda.Wpf.UI.Tests {
         private const string NotesStatsSelectedId = "notesStatsSelected";
         private const string NotesStatsSingleId = "notesStatsSingle";
         private const string NotesStatsDoubleId = "notesStatsDouble";
+        private const string NotesStatsTriplePlusLabelId = "notesStatsTriplePlusLabel";
         private const string NotesStatsTriplePlusId = "notesStatsTriplePlus";
         private const string ColumnStatsButtonId = "columnStats";
         private const string ColumnStatsValue1Id = "columnStatsValue1";
@@ -222,6 +226,46 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void MainWindowShowsProgramIconInWindowChrome() {
+            RunOpenedFixtureMapTest((driver, _) => { Assert.True(driver.MainWindowHasIcon()); });
+        }
+
+        [Fact]
+        public void SidebarInputsAndButtonsUseCompactHeights() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var songName = driver.GetElementBounds(SongNameTextBoxId);
+                var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+                var createPreview = driver.GetElementBounds(CreatePreviewButtonId);
+                var changeBpm = driver.GetElementBounds(ChangeBpmButtonId);
+
+                Assert.InRange(songName.height, 18, 28);
+                Assert.InRange(difficultyNumber.height, 18, 28);
+                Assert.InRange(createPreview.height, 20, 32);
+                Assert.InRange(changeBpm.height, 20, 32);
+            });
+        }
+
+        [Fact]
+        public void MapStatsAccordionsStretchAcrossSidebarWidth() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var createPreview = driver.GetElementBounds(CreatePreviewButtonId);
+                var notesExpander = driver.GetElementBounds("notesStats");
+                var notesStats = driver.GetElementBounds(NotesStatsAllId);
+                var columnStats = driver.GetElementBounds(ColumnStatsButtonId);
+                var npsStats = driver.GetElementBounds("npsStats");
+
+                Assert.True(Math.Abs(columnStats.left - notesExpander.left) < 8, $"Expected column stats to align with the notes section, but left edges were {columnStats.left:0.##} and {notesExpander.left:0.##}.");
+                Assert.True(Math.Abs(npsStats.left - notesExpander.left) < 8, $"Expected NPS stats to align with the notes section, but left edges were {npsStats.left:0.##} and {notesExpander.left:0.##}.");
+                Assert.True(RightEdge(notesExpander) >= RightEdge(createPreview), $"Expected notes stats to reach at least as far right as the wider left sidebar action row, but notes right edge was {RightEdge(notesExpander):0.##} and preview button right edge was {RightEdge(createPreview):0.##}.");
+                Assert.True(RightEdge(notesExpander) - RightEdge(createPreview) < 48, $"Expected notes stats to stay within the same overall left sidebar width budget, but notes right edge was {RightEdge(notesExpander):0.##} and preview button right edge was {RightEdge(createPreview):0.##}.");
+                Assert.True(Math.Abs(RightEdge(columnStats) - RightEdge(notesExpander)) < 8, $"Expected column stats to use the same width as notes stats, but right edges were {RightEdge(columnStats):0.##} and {RightEdge(notesExpander):0.##}.");
+                Assert.True(Math.Abs(RightEdge(npsStats) - RightEdge(notesExpander)) < 8, $"Expected NPS stats to use the same width as notes stats, but right edges were {RightEdge(npsStats):0.##} and {RightEdge(notesExpander):0.##}.");
+                Assert.True(notesExpander.width >= 190, $"Expected the stats accordion to stay wide enough for all stats columns, but width was {notesExpander.width:0.##}.");
+                Assert.True(notesStats.left - notesExpander.left < notesExpander.width * 0.35, $"Expected the notes values to remain inside a full-width expander, but note value left inset was {(notesStats.left - notesExpander.left):0.##} for expander width {notesExpander.width:0.##}.");
+            });
+        }
+
+        [Fact]
         public void FixtureMapShowsExpectedEditorShellControlsAndVisibleButtonText() {
             RunOpenedFixtureMapTest((driver, _) => {
                 Assert.Equal("Create Song Preview", driver.GetText(CreatePreviewButtonId));
@@ -265,6 +309,23 @@ namespace Edda.Wpf.UI.Tests {
                 Assert.False(driver.IsVisible(DifficultyButton2Id));
                 Assert.True(driver.IsEnabled(AddDifficultyButtonId));
                 Assert.False(driver.IsEnabled(DeleteDifficultyButtonId));
+            });
+        }
+
+        [Fact]
+        public void DifficultyButtonsShowRankOverlayAndActionsStayDockedRight() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                var difficulty0 = driver.GetElementBounds(DifficultyButton0Id);
+                var addButton = driver.GetElementBounds(AddDifficultyButtonId);
+                var deleteButton = driver.GetElementBounds(DeleteDifficultyButtonId);
+                var rankLabel = driver.GetNamedElementBoundsWithin(DifficultyButton0Id, DifficultyRankLabel1Id);
+
+                Assert.Equal("3", driver.GetNamedElementTextWithin(DifficultyButton0Id, DifficultyRankLabel1Id));
+                Assert.True(rankLabel.left > difficulty0.left + (difficulty0.width * 0.4), $"Expected rank overlay to sit on the right side of the difficulty button, but left edge was {rankLabel.left:0.##} within button starting at {difficulty0.left:0.##} and width {difficulty0.width:0.##}.");
+                Assert.True(rankLabel.top > difficulty0.top + (difficulty0.height * 0.35), $"Expected rank overlay to sit in the lower portion of the difficulty button, but top edge was {rankLabel.top:0.##} within button starting at {difficulty0.top:0.##} and height {difficulty0.height:0.##}.");
+                Assert.True(addButton.left > difficulty0.left + difficulty0.width, $"Expected add button to remain docked to the right of the difficulty slot, but add button left edge was {addButton.left:0.##} and difficulty button right edge was {(difficulty0.left + difficulty0.width):0.##}.");
+                Assert.InRange(Math.Abs(addButton.left - deleteButton.left), 0, 2);
+                Assert.True(deleteButton.top > addButton.top, $"Expected delete button to remain stacked below add, but add top was {addButton.top:0.##} and delete top was {deleteButton.top:0.##}.");
             });
         }
 
@@ -363,9 +424,15 @@ namespace Edda.Wpf.UI.Tests {
                 var mainWindow = driver.GetElementBounds(MainWindowId);
                 var songName = driver.GetElementBounds(SongNameTextBoxId);
                 var difficultyNumber = driver.GetElementBounds(DifficultyNumberTextBoxId);
+                var songVol = driver.GetElementBounds(SongVolumeTextId);
+                var drumVol = driver.GetElementBounds(DrumVolumeTextId);
+                var songTempo = driver.GetElementBounds(SongTempoTextId);
 
                 Assert.True(songName.left >= mainWindow.left + 10, $"Expected left sidebar content to keep at least 10 px of inner padding, but song name left edge was {songName.left:0.##} for window left edge {mainWindow.left:0.##}.");
                 Assert.True(RightEdge(difficultyNumber) <= RightEdge(mainWindow) - 14, $"Expected right sidebar content to keep visible inner padding, but difficulty field right edge was {RightEdge(difficultyNumber):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
+                Assert.True(RightEdge(songVol) <= RightEdge(mainWindow) - 14, $"Expected song-volume readout to stay inside the right sidebar, but right edge was {RightEdge(songVol):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
+                Assert.True(RightEdge(drumVol) <= RightEdge(mainWindow) - 14, $"Expected note-volume readout to stay inside the right sidebar, but right edge was {RightEdge(drumVol):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
+                Assert.True(RightEdge(songTempo) <= RightEdge(mainWindow) - 14, $"Expected song-speed readout to stay inside the right sidebar, but right edge was {RightEdge(songTempo):0.##} for window right edge {RightEdge(mainWindow):0.##}.");
             });
         }
 
@@ -394,18 +461,22 @@ namespace Edda.Wpf.UI.Tests {
                 var previewButtonInitiallyEnabled = driver.IsEnabled(PreviewPlayButtonId);
 
                 driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.False(driver.IsEnabled(SongTempoSliderId), driver.GetTestLog());
-                Assert.False(driver.IsEnabled(SongProgressSliderId), driver.GetTestLog());
-                Assert.False(driver.IsEnabled(DifficultyButton0Id), driver.GetTestLog());
-                Assert.False(driver.IsEnabled(PreviewPlayButtonId), driver.GetTestLog());
+                Assert.True(
+                    WaitForCondition(() =>
+                        !driver.IsEnabled(SongTempoSliderId) &&
+                        !driver.IsEnabled(SongProgressSliderId) &&
+                        !driver.IsEnabled(DifficultyButton0Id) &&
+                        !driver.IsEnabled(PreviewPlayButtonId)),
+                    driver.GetTestLog());
 
                 driver.ClickWithinElement(SongPlayerButtonId, 0.5, 0.5);
-                driver.WaitForIdle();
-                Assert.True(driver.IsEnabled(SongTempoSliderId));
-                Assert.True(driver.IsEnabled(SongProgressSliderId));
-                Assert.True(driver.IsEnabled(DifficultyButton0Id));
-                Assert.True(driver.IsEnabled(AddDifficultyButtonId));
+                Assert.True(
+                    WaitForCondition(() =>
+                        driver.IsEnabled(SongTempoSliderId) &&
+                        driver.IsEnabled(SongProgressSliderId) &&
+                        driver.IsEnabled(DifficultyButton0Id) &&
+                        driver.IsEnabled(AddDifficultyButtonId)),
+                    driver.GetTestLog());
                 Assert.Equal(previewButtonInitiallyEnabled, driver.IsEnabled(PreviewPlayButtonId));
             });
         }
@@ -552,10 +623,60 @@ namespace Edda.Wpf.UI.Tests {
             RunOpenedFixtureMapTest((driver, _) => {
                 driver.ClickButton(AddDifficultyButtonId);
                 driver.InvokeCommand(DialogNoCommandId);
+                Assert.True(
+                    WaitForCondition(() => driver.IsVisible(DifficultyButton1Id)),
+                    driver.GetTestLog());
+            });
+        }
+
+        [Fact]
+        public void AddingDifficultySortsButtonsByRankAndKeepsDifficultyDataAttached() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                driver.ClickButton(AddDifficultyButtonId);
+                driver.InvokeCommand(DialogNoCommandId);
                 driver.WaitForIdle();
 
-                Assert.True(driver.IsVisible(DifficultyButton1Id));
-                Assert.True(driver.IsEnabled(DeleteDifficultyButtonId));
+                Assert.Equal("1", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("20", driver.GetText(NoteSpeedTextBoxId));
+                Assert.Equal("1", driver.GetNamedElementTextWithin(DifficultyButton0Id, DifficultyRankLabel1Id));
+                Assert.Equal("3", driver.GetNamedElementTextWithin(DifficultyButton1Id, DifficultyRankLabel2Id));
+
+                driver.ClickButton(DifficultyButton1Id);
+                driver.WaitForIdle();
+                Assert.Equal("3", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("12", driver.GetText(NoteSpeedTextBoxId));
+
+                driver.ClickButton(DifficultyButton0Id);
+                driver.WaitForIdle();
+                Assert.Equal("1", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("20", driver.GetText(NoteSpeedTextBoxId));
+            });
+        }
+
+        [Fact]
+        public void EditingDifficultyRankResortsButtonsAndKeepsDifficultyDataAttached() {
+            RunOpenedFixtureMapTest((driver, _) => {
+                driver.ClickButton(AddDifficultyButtonId);
+                driver.InvokeCommand(DialogNoCommandId);
+                driver.WaitForIdle();
+
+                driver.SetText(DifficultyNumberTextBoxId, "7");
+                CommitTextboxEdits(driver);
+
+                Assert.Equal("7", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("20", driver.GetText(NoteSpeedTextBoxId));
+                Assert.Equal("3", driver.GetNamedElementTextWithin(DifficultyButton0Id, DifficultyRankLabel1Id));
+                Assert.Equal("7", driver.GetNamedElementTextWithin(DifficultyButton1Id, DifficultyRankLabel2Id));
+
+                driver.ClickButton(DifficultyButton0Id);
+                driver.WaitForIdle();
+                Assert.Equal("3", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("12", driver.GetText(NoteSpeedTextBoxId));
+
+                driver.ClickButton(DifficultyButton1Id);
+                driver.WaitForIdle();
+                Assert.Equal("7", driver.GetText(DifficultyNumberTextBoxId));
+                Assert.Equal("20", driver.GetText(NoteSpeedTextBoxId));
             });
         }
 
@@ -585,26 +706,28 @@ namespace Edda.Wpf.UI.Tests {
                 driver.WaitForIdle();
                 driver.ClickButton(AddDifficultyButtonId);
                 driver.InvokeCommand(DialogNoCommandId);
-                driver.WaitForIdle();
-
-                Assert.True(driver.IsVisible(DifficultyButton0Id));
-                Assert.True(driver.IsVisible(DifficultyButton1Id));
-                Assert.True(driver.IsVisible(DifficultyButton2Id));
-                Assert.False(driver.IsEnabled(AddDifficultyButtonId));
-                Assert.True(driver.IsEnabled(DeleteDifficultyButtonId));
+                Assert.True(
+                    WaitForCondition(() =>
+                        driver.IsVisible(DifficultyButton0Id) &&
+                        driver.IsVisible(DifficultyButton1Id) &&
+                        driver.IsVisible(DifficultyButton2Id) &&
+                        !driver.IsEnabled(AddDifficultyButtonId) &&
+                        driver.IsEnabled(DeleteDifficultyButtonId)),
+                    driver.GetTestLog());
 
                 driver.ClickButton(DeleteDifficultyButtonId);
                 driver.InvokeCommand(DialogYesCommandId);
                 driver.WaitForIdle();
                 driver.ClickButton(DeleteDifficultyButtonId);
                 driver.InvokeCommand(DialogYesCommandId);
-                driver.WaitForIdle();
-
-                Assert.True(driver.IsVisible(DifficultyButton0Id));
-                Assert.False(driver.IsVisible(DifficultyButton1Id));
-                Assert.False(driver.IsVisible(DifficultyButton2Id));
-                Assert.True(driver.IsEnabled(AddDifficultyButtonId));
-                Assert.False(driver.IsEnabled(DeleteDifficultyButtonId));
+                Assert.True(
+                    WaitForCondition(() =>
+                        driver.IsVisible(DifficultyButton0Id) &&
+                        !driver.IsVisible(DifficultyButton1Id) &&
+                        !driver.IsVisible(DifficultyButton2Id) &&
+                        driver.IsEnabled(AddDifficultyButtonId) &&
+                        !driver.IsEnabled(DeleteDifficultyButtonId)),
+                    driver.GetTestLog());
             });
         }
 
@@ -1621,6 +1744,19 @@ namespace Edda.Wpf.UI.Tests {
                 if (updatedProgress >= initialProgress + 150) {
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        private static bool WaitForCondition(Func<bool> predicate, int timeoutMs = 1500) {
+            var timeout = Stopwatch.StartNew();
+            while (timeout.Elapsed < TimeSpan.FromMilliseconds(timeoutMs)) {
+                if (predicate()) {
+                    return true;
+                }
+
+                Thread.Sleep(50);
             }
 
             return false;

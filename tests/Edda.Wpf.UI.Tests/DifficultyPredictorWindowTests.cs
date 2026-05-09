@@ -1,3 +1,4 @@
+using System;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -118,6 +119,40 @@ namespace Edda.Wpf.UI.Tests {
                 driver.ToggleCheckbox(PredictorShowInMapStatsCheckboxId, false);
                 driver.WaitForIdle();
                 Assert.False(driver.IsVisible(MainDifficultyPredictionLabelId));
+            });
+        }
+
+        [Fact]
+        public void DifficultyPredictorKeepsAlgorithmOptionsAndPredictedRanksInStableRows() {
+            WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+                driver.SelectMenuItem("Tools>Difficulty Predictor");
+                driver.WaitForIdle();
+
+                var pkBeam = driver.GetElementBounds(PredictorPkBeamRadioId);
+                var nytilde = driver.GetElementBounds(PredictorNytildeRadioId);
+                var melchior = driver.GetElementBounds(PredictorMelchiorRadioId);
+                var precise = driver.GetElementBounds(PredictorShowPreciseCheckboxId);
+                var mapStats = driver.GetElementBounds(PredictorShowInMapStatsCheckboxId);
+                var predict = driver.GetElementBounds(PredictorButtonId);
+
+                Assert.InRange(Math.Abs(pkBeam.left - nytilde.left), 0, 18);
+                Assert.InRange(Math.Abs(nytilde.left - melchior.left), 0, 18);
+                Assert.True(precise.top > melchior.top, $"Expected Show precise values below the algorithm list, but checkbox top {precise.top:0.##} was not below Melchior top {melchior.top:0.##}.");
+                Assert.True(mapStats.top > precise.top, $"Expected Show in map stats below Show precise values, but checkbox top {mapStats.top:0.##} was not below precise top {precise.top:0.##}.");
+
+                driver.ClickButton(PredictorButtonId);
+                driver.WaitForIdle();
+
+                var difficulty0 = driver.GetElementBounds(PredictorDifficultyButton0Id);
+                var difficulty1 = driver.GetElementBounds(PredictorDifficultyButton1Id);
+                var difficulty2 = driver.GetElementBounds("btnDifficulty2");
+
+                Assert.InRange(Math.Abs(difficulty0.top - difficulty1.top), 0, 6);
+                Assert.InRange(Math.Abs(difficulty1.top - difficulty2.top), 0, 6);
+                Assert.InRange(Math.Abs(difficulty0.width - difficulty1.width), 0, 4);
+                Assert.InRange(Math.Abs(difficulty1.width - difficulty2.width), 0, 4);
+                Assert.True(difficulty0.left < difficulty1.left && difficulty1.left < difficulty2.left, "Expected predicted difficulty buttons to stay ordered left-to-right.");
+                Assert.True(predict.top > difficulty0.top, $"Expected Predict button docked below the results row, but button top {predict.top:0.##} was not below result row top {difficulty0.top:0.##}.");
             });
         }
     }

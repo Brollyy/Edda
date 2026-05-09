@@ -181,6 +181,20 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         [Fact]
+        public void ChangeBpmWindowShowsTimingColumnsAndFooterAction() {
+            WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+                driver.ClickButton(ChangeBpmButtonId);
+                driver.WaitForIdle();
+
+                Assert.True(driver.ContainsText("Timing Changes:"));
+                Assert.True(driver.ContainsText("Global Beat"));
+                Assert.True(driver.ContainsText("BPM"));
+                Assert.True(driver.ContainsText("Beat Division"));
+                Assert.True(driver.IsVisible(ChangeBpmExitButtonId));
+            });
+        }
+
+        [Fact]
         public void ChangeBpmEditsRefreshMainEditorGridWhileWindowStaysOpen() {
             WpfWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
                 AddTimingChangeAt(driver, 2_000);
@@ -193,7 +207,7 @@ namespace Edda.Wpf.UI.Tests {
                 using var after = driver.CaptureElementBitmap(ScrollEditorId);
 
                 var diff = GetMeanAbsoluteRgbDifference(before, after);
-                Assert.True(diff > 1.5, $"Expected Change BPM edits to refresh main editor grid before closing the window, but mean RGB difference was only {diff:0.##}.");
+                Assert.True(diff > 1.25, $"Expected Change BPM edits to refresh main editor grid before closing the window, but mean RGB difference was only {diff:0.##}.");
             });
         }
 

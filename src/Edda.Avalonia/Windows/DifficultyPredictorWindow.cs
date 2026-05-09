@@ -3,10 +3,12 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Edda.Classes.MapEditorNS.Stats;
 using Edda.Const;
 using System;
 using System.Globalization;
+using System.IO;
 
 namespace Edda.Avalonia.Windows;
 
@@ -33,10 +35,11 @@ internal sealed class DifficultyPredictorWindow : Window {
         this.mainWindow = mainWindow;
         userSettings = mainWindow.UserSettings;
         Title = "Difficulty Predictor";
-        Width = 300;
+        Width = 270;
         Height = 360;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Background = new SolidColorBrush(Color.Parse("#D4D0C8"));
         AutomationHelper.SetAutomationId(this, "DifficultyPredictorWindow");
         Content = BuildRoot();
         LoadSettings();
@@ -46,67 +49,74 @@ internal sealed class DifficultyPredictorWindow : Window {
     Control BuildRoot() {
         var root = new DockPanel();
 
+        var header = new Border {
+            Padding = new Thickness(10),
+            BorderBrush = new SolidColorBrush(Color.Parse("#5B6475")),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Background = CreatePanelGradient()
+        };
+        DockPanel.SetDock(header, Dock.Top);
+        header.Child = BuildAlgorithmPanel();
+        root.Children.Add(header);
+
         var footer = new Border {
-            Padding = new Thickness(12),
-            Background = new LinearGradientBrush {
-                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-                GradientStops = new GradientStops {
-                    new GradientStop(Color.Parse("#F7F9FD"), 0),
-                    new GradientStop(Color.Parse("#DCE5F5"), 1)
-                }
-            }
+            Padding = new Thickness(0),
+            BorderBrush = new SolidColorBrush(Color.Parse("#5B6475")),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Background = CreatePanelGradient()
         };
         DockPanel.SetDock(footer, Dock.Bottom);
+        var footerPanel = new StackPanel();
         var predictButton = AutomationHelper.WithAutomationId(new Button {
             Name = "btnPredict",
             Content = "Predict",
             HorizontalAlignment = HorizontalAlignment.Right,
-            MinWidth = 84
+            Width = 70,
+            Margin = new Thickness(0, 10, 10, 10)
         }, "btnPredict");
         predictButton.Click += (_, _) => Predict();
-        footer.Child = predictButton;
+        footerPanel.Children.Add(predictButton);
+        footer.Child = footerPanel;
         root.Children.Add(footer);
 
         var body = new StackPanel {
-            Margin = new Thickness(16),
-            Spacing = 14
+            Margin = new Thickness(0),
+            Spacing = 0,
+            HorizontalAlignment = HorizontalAlignment.Center
         };
 
-        body.Children.Add(new TextBlock {
-            Text = "Select the algorithm used for prediction:",
-            TextWrapping = TextWrapping.Wrap
-        });
-
-        pkBeamRadio = CreateAlgorithmRadioButton("PKBeamAlgoRadioButton", "PKBeam's ML model", DifficultyPrediction.SupportedAlgorithms.PKBeam);
-        nytildeRadio = CreateAlgorithmRadioButton("NytildeAlgoRadioButton", "Nytilde's ML model (beta)", DifficultyPrediction.SupportedAlgorithms.Nytilde);
-        melchiorRadio = CreateAlgorithmRadioButton("MelchiorAlgoRadioButton", "Melchior's scoring", DifficultyPrediction.SupportedAlgorithms.Melchior);
-        body.Children.Add(pkBeamRadio);
-        body.Children.Add(nytildeRadio);
-        body.Children.Add(melchiorRadio);
-
-        showPreciseCheckbox = CreateSettingsCheckbox("CheckShowPreciseValues", "Show precise values", (_, _) => PersistSettings());
-        showInMapStatsCheckbox = CreateSettingsCheckbox("CheckShowInMapStats", "Show in map stats", (_, _) => PersistSettings());
-        body.Children.Add(showPreciseCheckbox);
-        body.Children.Add(showInMapStatsCheckbox);
+        var settingsGrid = new Grid {
+            ColumnDefinitions = new ColumnDefinitions("11.684,138.316,25"),
+            RowDefinitions = new RowDefinitions("*,*,*,*,*,*,*,*,*"),
+            Width = 200,
+            Margin = new Thickness(0, 15, 0, 15)
+        };
+        settingsGrid.Children.Add(CreateSettingsLabel(2, 0, 2, 2, new Thickness(0, 0, 0, 26), "Show precise values"));
+        settingsGrid.Children.Add(CreateSettingsCheckboxCell("CheckShowPreciseValues", 2, 2, 2, new Thickness(0, 0, 0, 26), (_, _) => PersistSettings()));
+        settingsGrid.Children.Add(CreateSettingsLabel(3, 0, 6, 2, default, "Show in map stats"));
+        settingsGrid.Children.Add(CreateSettingsCheckboxCell("CheckShowInMapStats", 3, 2, 6, default, (_, _) => PersistSettings()));
+        body.Children.Add(settingsGrid);
 
         resultsPanel = AutomationHelper.WithAutomationId(new StackPanel {
             Name = "PanelPredictionResults",
-            IsVisible = false,
-            Spacing = 8
+            Spacing = 8,
+            Width = 200,
+            IsVisible = false
         }, "PanelPredictionResults");
         resultsPanel.Children.Add(new TextBlock {
-            Text = "Predicted Difficulty Ranks:"
+            Text = "Predicted Difficulty Ranks:",
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 5)
         });
 
         var difficultyButtons = new StackPanel {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Spacing = 10
+            Spacing = 0
         };
-        (difficultyButton0, difficultyLabel1) = CreateDifficultyButton("btnDifficulty0", "lblDifficultyRank1");
-        (difficultyButton1, difficultyLabel2) = CreateDifficultyButton("btnDifficulty1", "lblDifficultyRank2");
-        (difficultyButton2, difficultyLabel3) = CreateDifficultyButton("btnDifficulty2", "lblDifficultyRank3");
+        (difficultyButton0, difficultyLabel1) = CreateDifficultyButton("btnDifficulty0", "lblDifficultyRank1", "difficulty1.png");
+        (difficultyButton1, difficultyLabel2) = CreateDifficultyButton("btnDifficulty1", "lblDifficultyRank2", "difficulty2.png");
+        (difficultyButton2, difficultyLabel3) = CreateDifficultyButton("btnDifficulty2", "lblDifficultyRank3", "difficulty3.png");
         difficultyButtons.Children.Add(difficultyButton0);
         difficultyButtons.Children.Add(difficultyButton1);
         difficultyButtons.Children.Add(difficultyButton2);
@@ -121,16 +131,74 @@ internal sealed class DifficultyPredictorWindow : Window {
             FontSize = 11
         }, "PanelPredictionWarning");
         resultsPanel.Children.Add(warningPanel);
-        body.Children.Add(resultsPanel);
+        body.Children.Add(new Grid {
+            Width = 200,
+            MinHeight = 76,
+            Children = { resultsPanel }
+        });
 
         root.Children.Add(body);
         return root;
     }
 
-    RadioButton CreateAlgorithmRadioButton(string automationId, string text, string algorithm) {
+    Control BuildAlgorithmPanel() {
+        var panel = new StackPanel {
+            Spacing = 8
+        };
+        panel.Children.Add(new TextBlock {
+            Text = "Select the algorithm used for prediction:",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 5)
+        });
+
+        pkBeamRadio = CreateAlgorithmRadioButton(
+            "PKBeamAlgoRadioButton",
+            "PKBeam's ML model",
+            DifficultyPrediction.SupportedAlgorithms.PKBeam,
+            "Machine learning model developed by PKBeam and trained on selected custom maps. Overall best option at the moment, but it has issues estimating difficulty above 9. For best results, use with completed maps.");
+        nytildeRadio = CreateAlgorithmRadioButton(
+            "NytildeAlgoRadioButton",
+            "Nytilde's ML model (beta)",
+            DifficultyPrediction.SupportedAlgorithms.Nytilde,
+            "Machine learning model developed by Nytilde and trained on OST maps up to Jonathan Young RAID. It has known issues with estimating difficulty for very hard maps and non-standard mapping patterns. Best used to estimate difficulty of maps in 3-7 range.");
+        melchiorRadio = CreateAlgorithmRadioButton(
+            "MelchiorAlgoRadioButton",
+            "Melchior's scoring",
+            DifficultyPrediction.SupportedAlgorithms.Melchior,
+            "A simple scoring algorithm suggested by Melchior. It takes into account horizontal and vertical distances that each hand needs to move to hit the runes to estimate the map difficulty. More accurate for harder maps and best used with fully completed maps.");
+        panel.Children.Add(pkBeamRadio);
+        panel.Children.Add(nytildeRadio);
+        panel.Children.Add(melchiorRadio);
+        return panel;
+    }
+
+    RadioButton CreateAlgorithmRadioButton(string automationId, string text, string algorithm, string tooltipText) {
+        var content = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        content.Children.Add(new TextBlock {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var infoImage = new Image {
+            Source = GetResourceBitmap("info_icon.png"),
+            Width = 12,
+            Height = 12,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(infoImage, new TextBlock {
+            Text = tooltipText,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 400
+        });
+        content.Children.Add(infoImage);
+
         var radio = AutomationHelper.WithAutomationId(new RadioButton {
             Name = automationId,
-            Content = text,
+            Content = content,
             GroupName = "DifficultyAlgorithm"
         }, automationId);
         radio.IsCheckedChanged += (_, _) => {
@@ -144,30 +212,86 @@ internal sealed class DifficultyPredictorWindow : Window {
         return radio;
     }
 
-    CheckBox CreateSettingsCheckbox(string automationId, string text, EventHandler<RoutedEventArgs> onClick) {
-        var checkbox = AutomationHelper.WithAutomationId(new CheckBox {
-            Name = automationId,
-            Content = text
-        }, automationId);
-        checkbox.Click += onClick;
-        return checkbox;
+    Control CreateSettingsLabel(int row, int column, int rowSpan, int columnSpan, Thickness margin, string text) {
+        var host = new Border {
+            Margin = margin,
+            Padding = new Thickness(5)
+        };
+        var textBlock = new TextBlock {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        host.Child = textBlock;
+        Grid.SetRow(host, row);
+        Grid.SetColumn(host, column);
+        Grid.SetRowSpan(host, rowSpan);
+        Grid.SetColumnSpan(host, columnSpan);
+        return host;
     }
 
-    static (Button button, TextBlock label) CreateDifficultyButton(string buttonId, string labelId) {
+    Control CreateSettingsCheckboxCell(string automationId, int row, int column, int rowSpan, Thickness margin, EventHandler<RoutedEventArgs> onClick) {
+        var hostBorder = new Border {
+            Margin = margin,
+            Padding = new Thickness(5)
+        };
+        var host = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        var checkbox = AutomationHelper.WithAutomationId(new CheckBox {
+            Name = automationId,
+            VerticalAlignment = VerticalAlignment.Center
+        }, automationId);
+        checkbox.Click += onClick;
+        if (automationId == "CheckShowPreciseValues") {
+            showPreciseCheckbox = checkbox;
+        } else {
+            showInMapStatsCheckbox = checkbox;
+        }
+        host.Children.Add(checkbox);
+        hostBorder.Child = host;
+        Grid.SetRow(hostBorder, row);
+        Grid.SetColumn(hostBorder, column);
+        Grid.SetRowSpan(hostBorder, rowSpan);
+        return hostBorder;
+    }
+
+    static (Button button, TextBlock label) CreateDifficultyButton(string buttonId, string labelId, string imageFileName) {
         var label = AutomationHelper.WithAutomationId(new TextBlock {
             Name = labelId,
             FontWeight = FontWeight.Bold,
-            FontSize = 16,
-            HorizontalAlignment = HorizontalAlignment.Center
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 2, 1)
         }, labelId);
+        var content = new Grid {
+            Width = 50
+        };
+        content.Children.Add(new Image {
+            Source = GetResourceBitmap(imageFileName),
+            Stretch = Stretch.Uniform
+        });
+        content.Children.Add(label);
         var button = AutomationHelper.WithAutomationId(new Button {
             Name = buttonId,
-            Width = 70,
-            Height = 52,
-            Content = label,
+            Width = 55,
+            Height = 40,
+            Padding = new Thickness(0),
+            Content = content,
             IsEnabled = false
         }, buttonId);
         return (button, label);
+    }
+
+    static LinearGradientBrush CreatePanelGradient() {
+        return new LinearGradientBrush {
+            StartPoint = new RelativePoint(0.5, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0.5, 1, RelativeUnit.Relative),
+            GradientStops = new GradientStops {
+                new GradientStop(Color.Parse("#F2F4F7"), 0),
+                new GradientStop(Color.Parse("#D4D0C8"), 1)
+            }
+        };
     }
 
     void LoadSettings() {
@@ -193,12 +317,12 @@ internal sealed class DifficultyPredictorWindow : Window {
         userSettings.SetValueForKey(UserSettingsKey.DifficultyPredictorShowInMapStats, showInMapStatsCheckbox.IsChecked ?? false);
         userSettings.Write();
         UpdatePreciseAvailability();
-        mainWindow.LoadSettingsFile();
+        mainWindow.LoadSettingsFile(reloadWaveforms: true);
         mainWindow.UpdateDifficultyPrediction();
     }
 
     void UpdatePreciseAvailability() {
-        showPreciseCheckbox.IsEnabled = mainWindow.ResolveDifficultyPredictor().GetSupportedFeatures().HasFlag(IDifficultyPredictor.Features.PreciseFloat);
+        showPreciseCheckbox.IsEnabled = mainWindow.ResolveDifficultyPredictor().GetSupportedFeatures().HasFlag(IDifficultyPredictor.Features.RealTime);
     }
 
     void Predict() {
@@ -250,5 +374,15 @@ internal sealed class DifficultyPredictorWindow : Window {
 
     static void SetTextForeground(TextBlock textBlock, System.Drawing.Color color) {
         textBlock.Foreground = new SolidColorBrush(Color.FromArgb(color.A, color.R, color.G, color.B));
+    }
+
+    static Bitmap? GetResourceBitmap(string resourceFileName) {
+        var resourcePath = Path.Combine(AppContext.BaseDirectory, "Resources", resourceFileName);
+        if (!File.Exists(resourcePath)) {
+            return null;
+        }
+
+        using var stream = File.OpenRead(resourcePath);
+        return new Bitmap(stream);
     }
 }

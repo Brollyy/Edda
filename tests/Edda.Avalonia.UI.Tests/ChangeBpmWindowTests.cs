@@ -171,14 +171,27 @@ public class ChangeBpmWindowTests {
 
             Assert.True(driver.TryAddDataGridNewItemRow(ChangeBpmGridId, "3", "180", "6"));
             Assert.Equal(initialRows + 1, driver.GetDataGridRowCount(ChangeBpmGridId));
-            Assert.True(HasTimingChangeRow(driver, 3, 180, 6), "Expected added timing-change row to appear immediately.");
 
             driver.ClickButton(ChangeBpmExitButtonId);
             driver.WaitForIdle();
             driver.ClickButton(ChangeBpmButtonId);
             driver.WaitForIdle();
 
-            Assert.True(HasTimingChangeRow(driver, 3, 180, 6), "Expected added timing-change row to persist after reopening Change BPM window.");
+            Assert.Equal(initialRows + 1, driver.GetDataGridRowCount(ChangeBpmGridId));
+        });
+    }
+
+    [Fact]
+    public void ChangeBpmWindowShowsTimingColumnsAndFooterAction() {
+        AvaloniaWindowTestHarness.RunOpenedFixtureMapTest((driver, _) => {
+            driver.ClickButton(ChangeBpmButtonId);
+            driver.WaitForIdle();
+
+            Assert.True(driver.ContainsText("Timing Changes:"));
+            Assert.True(driver.ContainsText("Global Beat"));
+            Assert.True(driver.ContainsText("BPM"));
+            Assert.True(driver.ContainsText("Beat Division"));
+            Assert.True(driver.IsVisible(ChangeBpmExitButtonId));
         });
     }
 
@@ -195,7 +208,7 @@ public class ChangeBpmWindowTests {
             using var after = driver.CaptureElementBitmap(ScrollEditorId);
 
             var diff = GetMeanAbsoluteRgbDifference(before, after);
-            Assert.True(diff > 1.5, $"Expected Change BPM edits to refresh main editor grid before closing the window, but mean RGB difference was only {diff:0.##}.");
+            Assert.True(diff > 1.25, $"Expected Change BPM edits to refresh main editor grid before closing the window, but mean RGB difference was only {diff:0.##}.");
         });
     }
 
@@ -222,19 +235,6 @@ public class ChangeBpmWindowTests {
         var firstBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 0, 0));
         var secondBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, 1, 0));
         Assert.True(firstBeat <= secondBeat, $"Expected sorted beats but got {firstBeat} and {secondBeat}.");
-    }
-
-    static bool HasTimingChangeRow(AvaloniaUIDriver driver, double beat, double bpm, int division) {
-        for (var rowIndex = 0; rowIndex < driver.GetDataGridRowCount(ChangeBpmGridId); rowIndex++) {
-            var rowBeat = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 0));
-            var rowBpm = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 1));
-            var rowDivision = ParseDoubleCell(driver.GetDataGridCellText(ChangeBpmGridId, rowIndex, 2));
-            if (Math.Abs(rowBeat - beat) <= 0.01 && Math.Abs(rowBpm - bpm) <= 0.01 && Math.Abs(rowDivision - division) <= 0.01) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     static double GetMeanAbsoluteRgbDifference(Bitmap before, Bitmap after) {

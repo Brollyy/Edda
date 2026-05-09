@@ -22,6 +22,12 @@ public sealed class AvaloniaUIDriver {
     const string SerialExecutionMutexName = @"Global\Edda.UiTests.SerialExecution";
     const string PickerCancelSentinel = "__EDDA_TEST_PICKER_CANCEL__";
     const uint WmClose = 0x0010;
+    const uint WmGetIcon = 0x007F;
+    const int IconSmall = 0;
+    const int IconBig = 1;
+    const int IconSmall2 = 2;
+    const int GclHicon = -14;
+    const int GclHiconSm = -34;
     const string PickerQueueFileEnvironmentVariable = "EDDA_TEST_PICKER_QUEUE_FILE";
     const string DebugLogFileEnvironmentVariable = "EDDA_TEST_DEBUG_LOG_FILE";
     const string KeepProfileEnvironmentVariable = "EDDA_TEST_KEEP_PROFILE";
@@ -45,6 +51,7 @@ public sealed class AvaloniaUIDriver {
 
     readonly TimeSpan defaultTimeout = TimeSpan.FromSeconds(15);
     readonly Dictionary<string, string?> launchEnvironmentOverrides = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, string> initialRoamingProfileFiles = new(StringComparer.OrdinalIgnoreCase);
     string? launchWorkingDirectory;
     readonly Dictionary<string, AutomationElement> elementCache = new(StringComparer.Ordinal);
 
@@ -78,6 +85,14 @@ public sealed class AvaloniaUIDriver {
         launchWorkingDirectory = string.IsNullOrWhiteSpace(path) ? null : path;
     }
 
+    public void SetInitialRoamingProfileFile(string relativePath, string contents) {
+        if (string.IsNullOrWhiteSpace(relativePath)) {
+            throw new ArgumentException("Profile path cannot be empty.", nameof(relativePath));
+        }
+
+        initialRoamingProfileFiles[relativePath] = contents ?? string.Empty;
+    }
+
     public void Launch() {
         if (appProcess is { HasExited: false }) {
             return;
@@ -98,6 +113,17 @@ public sealed class AvaloniaUIDriver {
         pickerSelectionQueueFilePath = Path.Combine(testProfileRoot, "picker-queue.txt");
         Directory.CreateDirectory(appDataRoot);
         Directory.CreateDirectory(localAppDataRoot);
+        var eddaRoamingRoot = Path.Combine(appDataRoot, "Edda");
+        Directory.CreateDirectory(eddaRoamingRoot);
+        foreach (var (relativePath, contents) in initialRoamingProfileFiles) {
+            var targetPath = Path.Combine(eddaRoamingRoot, relativePath);
+            var targetDirectory = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrWhiteSpace(targetDirectory)) {
+                Directory.CreateDirectory(targetDirectory);
+            }
+
+            File.WriteAllText(targetPath, contents);
+        }
         File.WriteAllText(pickerSelectionQueueFilePath, string.Empty);
         File.WriteAllText(driverLogFilePath, string.Empty);
         File.WriteAllText(standardOutputLogFilePath, string.Empty);
@@ -178,6 +204,7 @@ public sealed class AvaloniaUIDriver {
         standardOutputLogFilePath = null;
         standardErrorLogFilePath = null;
         launchEnvironmentOverrides.Clear();
+        initialRoamingProfileFiles.Clear();
         launchWorkingDirectory = null;
         pickerSelectionQueueFilePath = null;
         lastKnownMainWindowHandle = null;
@@ -910,6 +937,7 @@ public sealed class AvaloniaUIDriver {
             defaultTimeout,
             $"List item containing '{text}' in '{listAutomationId}'");
 
+        PrepareWindowForPointInput(item);
         PhysicalClickElement(item);
         WaitForIdle();
     }
@@ -931,6 +959,32 @@ public sealed class AvaloniaUIDriver {
         Thread.Sleep(20);
         mouse_event(MouseEventFRightUp, 0, 0, 0, UIntPtr.Zero);
         WaitForIdle();
+    }
+
+    public void MoveMouseToListItemContainingText(string listAutomationId, string text, double xRatio = 0.5, double yRatio = 0.5) {
+        var list = GetElement(listAutomationId);
+        var item = WaitForElement(
+            () => FindListItemContainingText(list, text),
+            defaultTimeout,
+            $"List item containing '{text}' in '{listAutomationId}'");
+
+        var interactionElement = ResolvePointInteractionElement(item);
+        PrepareWindowForPointInput(interactionElement);
+        TrySetFocus(interactionElement);
+        var point = ResolvePointInElement(interactionElement, xRatio, yRatio);
+        SetCursorPos(point.x + 8, point.y + 8);
+        Thread.Sleep(20);
+        SetCursorPos(point.x, point.y);
+        Thread.Sleep(40);
+    }
+
+    public Bitmap CaptureListItemContainingTextBitmap(string listAutomationId, string text) {
+        var list = GetElement(listAutomationId);
+        var item = WaitForElement(
+            () => FindListItemContainingText(list, text),
+            defaultTimeout,
+            $"List item containing '{text}' in '{listAutomationId}'");
+        return CaptureScreenRegion(ResolveVisibleBounds(item));
     }
 
     public int GetListItemCount(string id) {
@@ -1130,6 +1184,20 @@ public sealed class AvaloniaUIDriver {
         return element.Current.ItemStatus ?? string.Empty;
     }
 
+    public string GetNamedElementTextWithin(string containerId, string elementName) {
+        var container = GetElement(containerId);
+        var element = WaitForElement(
+            () => FindNamedDescendant(container, elementName),
+            defaultTimeout,
+            $"Element named '{elementName}' inside '{containerId}'");
+
+        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePatternObj)) {
+            return ((ValuePattern)valuePatternObj).Current.Value ?? string.Empty;
+        }
+
+        return element.Current.Name ?? string.Empty;
+    }
+
     public Bitmap CaptureNamedElementBitmapWithin(string containerId, string elementName) {
         var container = GetElement(containerId);
         var element = WaitForElement(
@@ -1137,6 +1205,12 @@ public sealed class AvaloniaUIDriver {
             defaultTimeout,
             $"Element named '{elementName}' inside '{containerId}'");
         return CaptureScreenRegion(ResolveVisibleBounds(element));
+    }
+
+    public bool MainWindowHasIcon() {
+        var mainWindow = FindMainWindow() ?? throw new InvalidOperationException("Main window was not available.");
+        var nativeHandle = TryGetNativeWindowHandle(mainWindow);
+        return nativeHandle != 0 && GetWindowIconHandle(new IntPtr(nativeHandle)) != IntPtr.Zero;
     }
 
     public void ResizeMainWindow(int width, int height) {
@@ -1575,7 +1649,7 @@ public sealed class AvaloniaUIDriver {
                 }
 
                 if (AreSameElement(parent, list)) {
-                    return candidate;
+                    return current;
                 }
 
                 candidate = current;
@@ -1590,13 +1664,15 @@ public sealed class AvaloniaUIDriver {
 
     static AutomationElement? FindNamedDescendant(AutomationElement container, string elementName) {
         try {
-            if (string.Equals(TryGetCurrentName(container), elementName, StringComparison.OrdinalIgnoreCase)) {
+            if (string.Equals(TryGetCurrentName(container), elementName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(TryGetCurrentAutomationId(container), elementName, StringComparison.OrdinalIgnoreCase)) {
                 return container;
             }
 
             var descendants = container.FindAll(TreeScope.Descendants, Condition.TrueCondition);
             foreach (AutomationElement descendant in descendants) {
-                if (string.Equals(TryGetCurrentName(descendant), elementName, StringComparison.OrdinalIgnoreCase)) {
+                if (string.Equals(TryGetCurrentName(descendant), elementName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(TryGetCurrentAutomationId(descendant), elementName, StringComparison.OrdinalIgnoreCase)) {
                     return descendant;
                 }
             }
@@ -1715,12 +1791,6 @@ public sealed class AvaloniaUIDriver {
         FocusElementWindow(element);
         TrySetFocus(element);
 
-        var bounds = element.Current.BoundingRectangle;
-        if (bounds.Width > 1 && bounds.Height > 1) {
-            PhysicalClickElement(element);
-            return;
-        }
-
         if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invokeObj)) {
             ((InvokePattern)invokeObj).Invoke();
             return;
@@ -1738,6 +1808,11 @@ public sealed class AvaloniaUIDriver {
             } else {
                 expand.Collapse();
             }
+        }
+
+        var bounds = element.Current.BoundingRectangle;
+        if (bounds.Width > 1 && bounds.Height > 1) {
+            PhysicalClickElement(element);
         }
     }
 
@@ -2666,6 +2741,15 @@ public sealed class AvaloniaUIDriver {
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool MoveWindow(IntPtr hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
 
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassLong", SetLastError = true)]
+    static extern uint GetClassLong32(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassLongPtr", SetLastError = true)]
+    static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+
     [DllImport("user32.dll")]
     static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -2683,6 +2767,36 @@ public sealed class AvaloniaUIDriver {
 
     [DllImport("user32.dll", SetLastError = true)]
     static extern uint SendInput(uint nInputs, [In] Input[] pInputs, int cbSize);
+
+    static IntPtr GetWindowIconHandle(IntPtr hwnd) {
+        var iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconSmall2), IntPtr.Zero);
+        if (iconHandle != IntPtr.Zero) {
+            return iconHandle;
+        }
+
+        iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconSmall), IntPtr.Zero);
+        if (iconHandle != IntPtr.Zero) {
+            return iconHandle;
+        }
+
+        iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconBig), IntPtr.Zero);
+        if (iconHandle != IntPtr.Zero) {
+            return iconHandle;
+        }
+
+        iconHandle = GetClassLongPtr(hwnd, GclHiconSm);
+        if (iconHandle != IntPtr.Zero) {
+            return iconHandle;
+        }
+
+        return GetClassLongPtr(hwnd, GclHicon);
+    }
+
+    static IntPtr GetClassLongPtr(IntPtr hwnd, int index) {
+        return IntPtr.Size == 8
+            ? GetClassLongPtr64(hwnd, index)
+            : new IntPtr(unchecked((int)GetClassLong32(hwnd, index)));
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     struct Input {

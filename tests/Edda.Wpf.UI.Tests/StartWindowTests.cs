@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Automation;
@@ -270,6 +271,38 @@ public class StartWindowTests {
     }
 
     [Fact]
+    public void StartWindowRecentMapHoverHighlightsEntry() {
+        var driver = new WpfUIDriver();
+        string? mapFolder = null;
+
+        try {
+            mapFolder = WpfWindowTestHarness.CreateFixtureMapCopy();
+            driver.Launch();
+            driver.WaitForIdle();
+            driver.SetTestFileSelection(mapFolder);
+            driver.ClickButton(StartupOpenMapButtonId);
+            driver.WaitForMainWindow();
+
+            driver.SendKeyboardShortcut("Ctrl+W");
+            driver.WaitForStartWindow();
+            Assert.True(driver.IsVisible(StartWindowId));
+            Assert.True(driver.ContainsText(mapFolder));
+
+            driver.MoveMouseWithinElement(StartWindowId, 0.08, 0.08);
+            using var before = driver.CaptureListItemContainingTextBitmap(StartupRecentMapsListId, mapFolder);
+            driver.MoveMouseToListItemContainingText(StartupRecentMapsListId, mapFolder);
+            System.Threading.Thread.Sleep(120);
+            using var after = driver.CaptureListItemContainingTextBitmap(StartupRecentMapsListId, mapFolder);
+
+            var diff = GetMeanAbsoluteRgbDifference(before, after);
+            Assert.True(diff > 0.6, $"Expected recent-map hover to visibly highlight the hovered entry, but mean RGB difference was only {diff:0.##}.");
+        } finally {
+            driver.Shutdown();
+            WpfWindowTestHarness.SafeDeleteDirectory(mapFolder);
+        }
+    }
+
+    [Fact]
     public void StartWindowRecentMapRightClickRespectsNoAndYesConfirmation() {
         var driver = new WpfUIDriver();
         string? mapFolder = null;
@@ -352,6 +385,24 @@ public class StartWindowTests {
 
     static double BottomEdge((double left, double top, double width, double height) bounds) {
         return bounds.top + bounds.height;
+    }
+
+    static double GetMeanAbsoluteRgbDifference(Bitmap before, Bitmap after) {
+        var width = Math.Min(before.Width, after.Width);
+        var height = Math.Min(before.Height, after.Height);
+        double total = 0;
+        var samples = 0;
+
+        for (var y = 0; y < height; y++) {
+            for (var x = 0; x < width; x++) {
+                var left = before.GetPixel(x, y);
+                var right = after.GetPixel(x, y);
+                total += (Math.Abs(left.R - right.R) + Math.Abs(left.G - right.G) + Math.Abs(left.B - right.B)) / 3.0;
+                samples++;
+            }
+        }
+
+        return samples == 0 ? 0 : total / samples;
     }
 }
 }

@@ -18,6 +18,12 @@ namespace Edda.Wpf.UI.Tests {
         private const string MainWindowId = "AppMainWindow";
         private const string MainWindowFallbackTitle = "Edda";
         private const string StartWindowOpenMapButtonId = "ButtonOpenMap";
+        private const uint WmGetIcon = 0x007F;
+        private const int IconSmall = 0;
+        private const int IconBig = 1;
+        private const int IconSmall2 = 2;
+        private const int GclHicon = -14;
+        private const int GclHiconSm = -34;
         private static readonly string[] MainWindowSentinelIds = {
             "btnSongPlayer",
             "sliderSongProgress",
@@ -53,6 +59,7 @@ namespace Edda.Wpf.UI.Tests {
 
         private Process? appProcess;
         private readonly Dictionary<string, string?> launchEnvironmentOverrides = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> initialRoamingProfileFiles = new(StringComparer.OrdinalIgnoreCase);
         private string? launchWorkingDirectory;
         private string? pickerSelectionQueueFilePath;
         private string? testProfileRoot;
@@ -73,6 +80,14 @@ namespace Edda.Wpf.UI.Tests {
             launchWorkingDirectory = string.IsNullOrWhiteSpace(path) ? null : path;
         }
 
+        public void SetInitialRoamingProfileFile(string relativePath, string contents) {
+            if (string.IsNullOrWhiteSpace(relativePath)) {
+                throw new ArgumentException("Profile path cannot be empty.", nameof(relativePath));
+            }
+
+            initialRoamingProfileFiles[relativePath] = contents ?? string.Empty;
+        }
+
         public void Launch() {
             if (appProcess is { HasExited: false }) {
                 return;
@@ -85,6 +100,17 @@ namespace Edda.Wpf.UI.Tests {
             pickerSelectionQueueFilePath = Path.Combine(testProfileRoot, "picker-queue.txt");
             Directory.CreateDirectory(appDataRoot);
             Directory.CreateDirectory(localAppDataRoot);
+            var eddaRoamingRoot = Path.Combine(appDataRoot, "Edda");
+            Directory.CreateDirectory(eddaRoamingRoot);
+            foreach (var entry in initialRoamingProfileFiles) {
+                var targetPath = Path.Combine(eddaRoamingRoot, entry.Key);
+                var targetDirectory = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(targetDirectory)) {
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                File.WriteAllText(targetPath, entry.Value);
+            }
             File.WriteAllText(pickerSelectionQueueFilePath, string.Empty);
 
             var startInfo = new ProcessStartInfo {
@@ -100,6 +126,11 @@ namespace Edda.Wpf.UI.Tests {
             startInfo.Environment["APPDATA"] = appDataRoot;
             startInfo.Environment["LOCALAPPDATA"] = localAppDataRoot;
             startInfo.Environment[PickerQueueFileEnvironmentVariable] = pickerSelectionQueueFilePath;
+            var systemRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? Environment.GetEnvironmentVariable("WINDIR");
+            if (!string.IsNullOrWhiteSpace(systemRoot)) {
+                startInfo.Environment["SystemRoot"] = systemRoot;
+                startInfo.Environment["WINDIR"] = systemRoot;
+            }
             foreach (var (key, value) in launchEnvironmentOverrides) {
                 startInfo.Environment[key] = value ?? string.Empty;
             }
@@ -143,6 +174,7 @@ namespace Edda.Wpf.UI.Tests {
             appProcess?.Dispose();
             appProcess = null;
             launchEnvironmentOverrides.Clear();
+            initialRoamingProfileFiles.Clear();
             launchWorkingDirectory = null;
             pickerSelectionQueueFilePath = null;
 
@@ -298,6 +330,20 @@ namespace Edda.Wpf.UI.Tests {
             return element.Current.ItemStatus ?? string.Empty;
         }
 
+        public string GetNamedElementTextWithin(string containerId, string elementName) {
+            var container = GetElement(containerId);
+            var element = WaitForElement(
+                () => FindNamedDescendant(container, elementName),
+                defaultTimeout,
+                $"Element named '{elementName}' inside '{containerId}'");
+
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePatternObj)) {
+                return ((ValuePattern)valuePatternObj).Current.Value ?? string.Empty;
+            }
+
+            return element.Current.Name ?? string.Empty;
+        }
+
         public IReadOnlyList<(double left, double top, double width, double height)> GetVisibleDescendantBoundsWithin(string containerId, ControlType controlType) {
             var container = GetElement(containerId);
             var matches = container.FindAll(
@@ -312,6 +358,12 @@ namespace Edda.Wpf.UI.Tests {
                     return (bounds.Left, bounds.Top, bounds.Width, bounds.Height);
                 })
                 .ToList();
+        }
+
+        public bool MainWindowHasIcon() {
+            var mainWindow = FindMainWindow() ?? throw new InvalidOperationException("Main window was not available.");
+            var nativeHandle = mainWindow.Current.NativeWindowHandle;
+            return nativeHandle != 0 && GetWindowIconHandle(new IntPtr(nativeHandle)) != IntPtr.Zero;
         }
 
         public void ResizeMainWindow(int width, int height) {
@@ -605,6 +657,32 @@ namespace Edda.Wpf.UI.Tests {
             Thread.Sleep(20);
             mouse_event(MouseEventFRightUp, 0, 0, 0, UIntPtr.Zero);
             WaitForIdle();
+        }
+
+        public void MoveMouseToListItemContainingText(string listAutomationId, string text, double xRatio = 0.5, double yRatio = 0.5) {
+            var list = GetElement(listAutomationId);
+            var item = WaitForElement(
+                () => FindListItemContainingText(list, text),
+                defaultTimeout,
+                $"List item containing '{text}' in '{listAutomationId}'"
+            );
+
+            FocusElementWindow(item);
+            var point = ResolvePointInElement(item, xRatio, yRatio);
+            SetCursorPos(point.x + 8, point.y + 8);
+            Thread.Sleep(20);
+            SetCursorPos(point.x, point.y);
+            Thread.Sleep(40);
+        }
+
+        public Bitmap CaptureListItemContainingTextBitmap(string listAutomationId, string text) {
+            var list = GetElement(listAutomationId);
+            var item = WaitForElement(
+                () => FindListItemContainingText(list, text),
+                defaultTimeout,
+                $"List item containing '{text}' in '{listAutomationId}'"
+            );
+            return CaptureScreenRegion(item.Current.BoundingRectangle);
         }
 
         public int CountWindowsByTitle(string title) {
@@ -1206,12 +1284,22 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private AutomationElement? FindByAutomationIdWithin(AutomationElement scope, string automationId) {
-            if (string.Equals(scope.Current.AutomationId, automationId, StringComparison.Ordinal)) {
-                return scope;
+            try {
+                if (string.Equals(scope.Current.AutomationId, automationId, StringComparison.Ordinal)) {
+                    return scope;
+                }
+
+                var descendants = scope.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                foreach (AutomationElement descendant in descendants) {
+                    if (string.Equals(descendant.Current.AutomationId, automationId, StringComparison.Ordinal)) {
+                        return descendant;
+                    }
+                }
+            } catch {
+                // Fall through and report no match.
             }
 
-            var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
-            return scope.FindFirst(TreeScope.Descendants, condition);
+            return null;
         }
 
         private AutomationElement? FindElementByName(string name, ControlType controlType) {
@@ -1459,8 +1547,24 @@ namespace Edda.Wpf.UI.Tests {
         }
 
         private static AutomationElement? FindNamedDescendant(AutomationElement scope, string name) {
-            var condition = new PropertyCondition(AutomationElement.NameProperty, name);
-            return scope.FindFirst(TreeScope.Descendants, condition);
+            try {
+                if (string.Equals(scope.Current.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(scope.Current.AutomationId, name, StringComparison.OrdinalIgnoreCase)) {
+                    return scope;
+                }
+
+                var descendants = scope.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                foreach (AutomationElement descendant in descendants) {
+                    if (string.Equals(descendant.Current.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(descendant.Current.AutomationId, name, StringComparison.OrdinalIgnoreCase)) {
+                        return descendant;
+                    }
+                }
+            } catch {
+                // Fall through and report no match.
+            }
+
+            return null;
         }
 
         private static Bitmap CaptureScreenRegion(System.Windows.Rect bounds) {
@@ -2219,6 +2323,15 @@ namespace Edda.Wpf.UI.Tests {
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", EntryPoint = "GetClassLong", SetLastError = true)]
+        private static extern uint GetClassLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetClassLongPtr", SetLastError = true)]
+        private static extern IntPtr GetClassLongPtr64(IntPtr hWnd, int nIndex);
+
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -2239,5 +2352,35 @@ namespace Edda.Wpf.UI.Tests {
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+
+        private static IntPtr GetWindowIconHandle(IntPtr hwnd) {
+            var iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconSmall2), IntPtr.Zero);
+            if (iconHandle != IntPtr.Zero) {
+                return iconHandle;
+            }
+
+            iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconSmall), IntPtr.Zero);
+            if (iconHandle != IntPtr.Zero) {
+                return iconHandle;
+            }
+
+            iconHandle = SendMessage(hwnd, WmGetIcon, new IntPtr(IconBig), IntPtr.Zero);
+            if (iconHandle != IntPtr.Zero) {
+                return iconHandle;
+            }
+
+            iconHandle = GetClassLongPtr(hwnd, GclHiconSm);
+            if (iconHandle != IntPtr.Zero) {
+                return iconHandle;
+            }
+
+            return GetClassLongPtr(hwnd, GclHicon);
+        }
+
+        private static IntPtr GetClassLongPtr(IntPtr hwnd, int index) {
+            return IntPtr.Size == 8
+                ? GetClassLongPtr64(hwnd, index)
+                : new IntPtr(unchecked((int)GetClassLong32(hwnd, index)));
+        }
     }
 }

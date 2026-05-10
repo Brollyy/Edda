@@ -27,6 +27,7 @@ namespace Edda.Windows {
             PKBeamAlgoRadioButton.IsChecked = selectedAlgorithm == DifficultyPrediction.SupportedAlgorithms.PKBeam;
             NytildeAlgoRadioButton.IsChecked = selectedAlgorithm == DifficultyPrediction.SupportedAlgorithms.Nytilde;
             MelchiorAlgoRadioButton.IsChecked = selectedAlgorithm == DifficultyPrediction.SupportedAlgorithms.Melchior;
+            TimelineAlgoRadioButton.IsChecked = selectedAlgorithm == DifficultyPrediction.SupportedAlgorithms.Timeline;
             windowLoaded = true;
         }
 
@@ -112,4 +113,3 @@ namespace Edda.Windows {
             }
         }
     }
-}

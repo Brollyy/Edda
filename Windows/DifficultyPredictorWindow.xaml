@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:Edda.Windows"
         mc:Ignorable="d"
-        Title="Difficulty Predictor" Height="340" Width="270" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" Background="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" >
+        Title="Difficulty Predictor" Height="380" Width="270" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" Background="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" >
     <Grid>
         <DockPanel>
             <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkDarkBrushKey}}" BorderThickness="0, 0, 0, 1" Padding="10">
@@ -51,6 +51,19 @@
                                 <Image.ToolTip>
                                     <ToolTip MaxWidth="400">
                                         <TextBlock Text="A simple scoring algorithm suggested by Melchior. It takes into account horizontal and vertical distances that each hand needs to move to hit the runes to estimate the map difficulty. More accurate for harder maps and best used with fully completed maps." TextWrapping="WrapWithOverflow"/>
+                                    </ToolTip>
+                                </Image.ToolTip>
+                            </Image>
+                        </WrapPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="TimelineAlgoRadioButton" GroupName="diffAlgo" Checked="TimelineAlgoRadioButton_Checked">
+                        <WrapPanel>
+                            <TextBlock Text="Timeline strain model "/>
+                            <Image Source="/Resources/info_icon.png" Margin="0,2,0,0" Width="12" Height="12"
+                                   ToolTipService.IsEnabled="True" ToolTipService.InitialShowDelay="0" ToolTipService.ShowOnDisabled="True">
+                                <Image.ToolTip>
+                                    <ToolTip MaxWidth="400">
+                                        <TextBlock Text="Rule-based deterministic predictor based on local strain timeline aggregation over 4s windows with 0.5s stride." TextWrapping="WrapWithOverflow"/>
                                     </ToolTip>
                                 </Image.ToolTip>
                             </Image>

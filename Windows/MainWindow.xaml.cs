@@ -894,6 +894,7 @@ namespace Edda {
                 DifficultyPrediction.SupportedAlgorithms.PKBeam => DifficultyPredictorPKBeam.SINGLETON,
                 DifficultyPrediction.SupportedAlgorithms.Nytilde => DifficultyPredictorNytilde.SINGLETON,
                 DifficultyPrediction.SupportedAlgorithms.Melchior => DifficultyPredictorMelchior.SINGLETON,
+                DifficultyPrediction.SupportedAlgorithms.Timeline => TimelineDifficultyPredictor.SINGLETON,
                 _ => DifficultyPredictorPKBeam.SINGLETON
             };
 

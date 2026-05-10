@@ -1,23 +1,14 @@
 #nullable enable
 
 using Edda.Const;
-using NAudio.Vorbis;
 using Spectrogram;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Threading;
-using DrawingColor = System.Drawing.Color;
 
 namespace Edda {
-    [SupportedOSPlatform("windows")]
     public static class VorbisSpectrogramBitmapRenderer {
         public static SpectrogramBitmapSet? Render(
             string filePath,
@@ -28,36 +19,32 @@ namespace Edda {
             string? colormap,
             bool drawFlipped,
             int numChunks,
-            CancellationToken cancellationToken) {
+            CancellationToken cancellationToken,
+            ISpectrogramAudioReader audioReader) {
             if (numChunks <= 0 || string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) {
                 return null;
             }
 
             colormap ??= Colormap.Blues.Name;
-            var backgroundColor = Colormap.GetColormap(colormap).GetColor(0);
-            var cacheSearchPattern = string.Format(Editor.Spectrogram.CachedBmpFilenameFormat, type, quality, maxFreq, colormap);
+            var selectedColormap = Colormap.GetColormap(colormap);
+            var backgroundRgb = selectedColormap.GetRGB((byte)0);
 
-            if (TryLoadCachedChunks(filePath, cache, cacheSearchPattern, drawFlipped, numChunks, cancellationToken, out var cachedBitmaps)) {
-                return new SpectrogramBitmapSet(backgroundColor, cachedBitmaps);
-            }
-
-            using var reader = new VorbisWaveReader(filePath);
-            var bytesPerSample = Math.Max(1, reader.WaveFormat.BitsPerSample / 8);
-            var numSamples = reader.Length / bytesPerSample;
+            var audioSamples = audioReader.ReadSamples(filePath);
+            var bytesPerSample = Math.Max(1, audioSamples.BitsPerSample / 8);
+            var numSamples = audioSamples.SourceLengthBytes / bytesPerSample;
 
             if (numSamples > numChunks * Editor.Spectrogram.MaxSampleSteps * Editor.Spectrogram.StepSize * (int)quality) {
                 return null;
             }
 
-            var audioBuffer = new float[numSamples];
-            reader.Read(audioBuffer, 0, (int)numSamples);
+            var audioBuffer = audioSamples.Samples;
             cancellationToken.ThrowIfCancellationRequested();
 
             var audioBufferDouble = Array.ConvertAll(audioBuffer, sample => maxFreq * (double)sample);
             var fftSize = (int)Math.Pow(2, Editor.Spectrogram.FftSizeExp);
             var stepSize = Editor.Spectrogram.StepSize * (int)quality;
-            var generator = new SpectrogramGenerator(reader.WaveFormat.SampleRate, fftSize: fftSize, stepSize: stepSize, maxFreq: maxFreq) {
-                Colormap = Colormap.GetColormap(colormap)
+            var generator = new SpectrogramGenerator(audioSamples.SampleRate, fftSize: fftSize, stepSize: stepSize, maxFreq: maxFreq) {
+                Colormap = selectedColormap
             };
             generator.Add(audioBufferDouble);
 
@@ -66,127 +53,76 @@ namespace Edda {
             generator.Add(new double[Math.Max(expectedWidth - generator.Width, 0) * stepSize]);
             cancellationToken.ThrowIfCancellationRequested();
 
-            using var spectrogramBitmap = type switch {
-                SpectrogramType.MelScale => generator.GetBitmapMel(melBinCount: Editor.Spectrogram.MelBinCount),
-                SpectrogramType.MaxScale => generator.GetBitmapMax(),
-                _ => generator.GetBitmap()
+            var ffts = type switch {
+                SpectrogramType.MelScale => generator.GetMelFFTs(Editor.Spectrogram.MelBinCount),
+                SpectrogramType.MaxScale => ReduceFftsByMax(generator.GetFFTs(), reduction: 4),
+                _ => generator.GetFFTs()
             };
 
-            var splitBitmaps = SplitBitmapHorizontally(spectrogramBitmap, numChunks);
-            try {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                SaveChunksToCache(filePath, cache, cacheSearchPattern, splitBitmaps);
-
-                var transformedBitmaps = new Bitmap[splitBitmaps.Length];
-                for (var i = 0; i < splitBitmaps.Length; i++) {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    transformedBitmaps[i] = TransformBitmap(splitBitmaps[i], drawFlipped);
-                }
-
-                return new SpectrogramBitmapSet(backgroundColor, transformedBitmaps);
-            } finally {
-                foreach (var bitmap in splitBitmaps) {
-                    bitmap.Dispose();
-                }
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new SpectrogramBitmapSet(
+                new SpectrogramRgbColor(backgroundRgb.Item1, backgroundRgb.Item2, backgroundRgb.Item3),
+                RenderChunks(ffts, selectedColormap, drawFlipped, numChunks, cancellationToken));
         }
 
         public static string GetCacheDirectoryPath(string filePath) {
             return Path.Combine(Path.GetDirectoryName(filePath) ?? string.Empty, Program.CachePath);
         }
 
-        static bool TryLoadCachedChunks(
-            string filePath,
-            bool cache,
-            string cacheSearchPattern,
+        static SpectrogramPixelChunk[] RenderChunks(
+            IReadOnlyList<double[]> ffts,
+            Colormap colormap,
             bool drawFlipped,
             int numChunks,
-            CancellationToken cancellationToken,
-            out Bitmap[] bitmaps) {
-            bitmaps = [];
-            var cacheDirectoryPath = GetCacheDirectoryPath(filePath);
-            if (!cache || !Directory.Exists(cacheDirectoryPath)) {
-                return false;
+            CancellationToken cancellationToken) {
+            if (ffts.Count == 0) {
+                return [];
             }
 
-            var chunkFiles = Directory
-                .GetFiles(cacheDirectoryPath, cacheSearchPattern)
-                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var frequencyBins = Math.Max(1, ffts.Max(fft => fft.Length));
+            var chunks = new SpectrogramPixelChunk[numChunks];
+            for (var chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+                cancellationToken.ThrowIfCancellationRequested();
+                var startColumn = ffts.Count * chunkIndex / numChunks;
+                var endColumn = Math.Max(startColumn + 1, ffts.Count * (chunkIndex + 1) / numChunks);
+                var height = endColumn - startColumn;
+                var pixels = new byte[frequencyBins * height * 4];
 
-            if (chunkFiles.Length != numChunks) {
-                foreach (var chunkFile in chunkFiles) {
-                    File.Delete(chunkFile);
+                for (var timeIndex = 0; timeIndex < height; timeIndex++) {
+                    var fft = ffts[Math.Min(startColumn + timeIndex, ffts.Count - 1)];
+                    var outputRow = height - 1 - timeIndex;
+                    for (var bin = 0; bin < frequencyBins; bin++) {
+                        var sourceBin = drawFlipped ? bin : frequencyBins - 1 - bin;
+                        var value = sourceBin < fft.Length ? fft[sourceBin] : 0;
+                        var intensity = (byte)Math.Clamp(value, 0, 255);
+                        var (red, green, blue) = colormap.GetRGB(intensity);
+                        var offset = ((outputRow * frequencyBins) + bin) * 4;
+                        pixels[offset] = blue;
+                        pixels[offset + 1] = green;
+                        pixels[offset + 2] = red;
+                        pixels[offset + 3] = 255;
+                    }
                 }
 
-                return false;
+                chunks[chunkIndex] = new SpectrogramPixelChunk(frequencyBins, height, pixels);
             }
 
-            var loadedBitmaps = new Bitmap[chunkFiles.Length];
-            try {
-                for (var i = 0; i < chunkFiles.Length; i++) {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    using var bitmap = (Bitmap)Bitmap.FromFile(chunkFiles[i]);
-                    loadedBitmaps[i] = TransformBitmap(bitmap, drawFlipped);
-                }
-
-                bitmaps = loadedBitmaps;
-                return true;
-            } catch {
-                foreach (var bitmap in loadedBitmaps.Where(bitmap => bitmap != null)) {
-                    bitmap.Dispose();
-                }
-
-                throw;
-            }
+            return chunks;
         }
 
-        static void SaveChunksToCache(string filePath, bool cache, string cacheSearchPattern, Bitmap[] splitBitmaps) {
-            if (!cache) {
-                return;
-            }
-
-            var cacheDirectoryPath = GetCacheDirectoryPath(filePath);
-            Directory.CreateDirectory(cacheDirectoryPath);
-
-            for (var i = 0; i < splitBitmaps.Length; i++) {
-                var cachedPath = Path.Combine(cacheDirectoryPath, cacheSearchPattern.Replace("*", $"{i:000}"));
-                try {
-                    splitBitmaps[i].Save(cachedPath, ImageFormat.Png);
-                } catch (ExternalException ex) {
-                    Trace.WriteLine($"WARNING: Exception when saving spectrogram BMP: ({ex})");
-                    File.Delete(cachedPath);
-                    return;
+        static List<double[]> ReduceFftsByMax(List<double[]> ffts, int reduction) {
+            var reduced = new List<double[]>(ffts.Count);
+            foreach (var fft in ffts) {
+                var reducedFft = new double[fft.Length / reduction];
+                for (var i = 0; i < reducedFft.Length; i++) {
+                    for (var offset = 0; offset < reduction; offset++) {
+                        reducedFft[i] = Math.Max(reducedFft[i], fft[i * reduction + offset]);
+                    }
                 }
-            }
-        }
-
-        static Bitmap[] SplitBitmapHorizontally(Bitmap source, int numChunks) {
-            if (numChunks == 1) {
-                return [(Bitmap)source.Clone()];
+                reduced.Add(reducedFft);
             }
 
-            var splitBitmaps = new Bitmap[numChunks];
-            for (var i = 0; i < numChunks; i++) {
-                var startPixel = source.Width * i / numChunks;
-                var endPixel = source.Width * (i + 1) / numChunks;
-                var bitmap = new Bitmap(endPixel - startPixel, source.Height);
-                using var graphics = Graphics.FromImage(bitmap);
-                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                graphics.DrawImage(source, 0, 0, new Rectangle(startPixel, 0, bitmap.Width, bitmap.Height), GraphicsUnit.Pixel);
-                splitBitmaps[i] = bitmap;
-            }
-
-            return splitBitmaps;
-        }
-
-        static Bitmap TransformBitmap(Bitmap bitmap, bool drawFlipped) {
-            var transformed = (Bitmap)bitmap.Clone();
-            transformed.RotateFlip(drawFlipped
-                ? RotateFlipType.Rotate270FlipX
-                : RotateFlipType.Rotate270FlipNone);
-            return transformed;
+            return reduced;
         }
 
         public enum SpectrogramType {
@@ -202,23 +138,23 @@ namespace Edda {
         }
     }
 
-    [SupportedOSPlatform("windows")]
     public sealed class SpectrogramBitmapSet : IDisposable {
-        readonly Bitmap[] bitmaps;
+        readonly SpectrogramPixelChunk[] chunks;
 
-        public SpectrogramBitmapSet(DrawingColor backgroundColor, Bitmap[] bitmaps) {
+        public SpectrogramBitmapSet(SpectrogramRgbColor backgroundColor, SpectrogramPixelChunk[] chunks) {
             BackgroundColor = backgroundColor;
-            this.bitmaps = bitmaps ?? [];
+            this.chunks = chunks ?? [];
         }
 
-        public DrawingColor BackgroundColor { get; }
+        public SpectrogramRgbColor BackgroundColor { get; }
 
-        public IReadOnlyList<Bitmap> Bitmaps => bitmaps;
+        public IReadOnlyList<SpectrogramPixelChunk> Chunks => chunks;
 
         public void Dispose() {
-            foreach (var bitmap in bitmaps) {
-                bitmap.Dispose();
-            }
         }
     }
+
+    public readonly record struct SpectrogramRgbColor(byte R, byte G, byte B);
+
+    public sealed record SpectrogramPixelChunk(int Width, int Height, byte[] BgraPixels);
 }

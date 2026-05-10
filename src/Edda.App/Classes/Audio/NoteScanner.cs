@@ -5,7 +5,7 @@ public class NoteScanner : AudioScanner {
     readonly INoteScannerUiAdapter uiAdapter;
     List<Note> notesPlayed;
     public bool playedLateNote { get; set; }
-    public NoteScanner(INoteScannerUiAdapter uiAdapter, ParallelAudioPlayer parallelAudioPlayer, double tempo) : base(parallelAudioPlayer, tempo) {
+    public NoteScanner(INoteScannerUiAdapter uiAdapter, IAudioCuePlayer parallelAudioPlayer, double tempo) : base(parallelAudioPlayer, tempo) {
         this.uiAdapter = uiAdapter;
         this.playedLateNote = false;
     }

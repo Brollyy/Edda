@@ -25,11 +25,7 @@ using Edda.Classes.MapEditorNS.Stats;
 using Edda.Const;
 using Edda.Startup;
 using Newtonsoft.Json.Linq;
-using NAudio.CoreAudioApi;
 using NAudio.Vorbis;
-using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
-using SoundTouch.Net.NAudioSupport;
 using AvaloniaColor = Avalonia.Media.Color;
 using Button = Avalonia.Controls.Button;
 using EddaProgram = Edda.Const.Program;
@@ -69,18 +65,15 @@ public sealed partial class MainWindow : Window {
     double spectrogramResizeDragOriginX;
     double spectrogramResizeDragOriginWidth;
 
-    SongPreviewController? songPreviewController;
+    OpenAlAudioEngine? audioEngine;
+    AvaloniaOpenAlSongPreviewController? songPreviewController;
     CancellationTokenSource songPlaybackCancellationTokenSource = new();
     readonly Stopwatch playbackClock = new();
     double playbackStartMilliseconds;
-    MMDeviceEnumerator? deviceEnumerator;
-    DeviceChangeListener? deviceChangeListener;
-    SampleChannel? songChannel;
-    VorbisWaveReader? songStream;
-    SoundTouchWaveStream? songTempoStream;
-    WasapiOut? songPlayer;
-    ParallelAudioPlayer? drummer;
-    ParallelAudioPlayer? metronome;
+    OpenAlBuffer? songPlayerBuffer;
+    OpenAlSource? songPlayerSource;
+    IAudioCuePlayer? drummer;
+    IAudioCuePlayer? metronome;
     NoteScanner? noteScanner;
     BeatScanner? beatScanner;
 
@@ -206,13 +199,6 @@ public sealed partial class MainWindow : Window {
             Icon = new WindowIcon(iconPath);
         }
 
-        if (OperatingSystem.IsWindows()) {
-            deviceEnumerator = new MMDeviceEnumerator();
-            deviceChangeListener = new DeviceChangeListener(new AvaloniaDeviceChangeUiAdapter(this));
-            deviceEnumerator.RegisterEndpointNotificationCallback(deviceChangeListener);
-            playbackDevices.AddRange(ResolvePlaybackDevices());
-        }
-
         songPositionTimer = new DispatcherTimer {
             Interval = TimeSpan.FromMilliseconds(16)
         };
@@ -223,7 +209,13 @@ public sealed partial class MainWindow : Window {
                 PauseSong();
             }
         };
-        songPreviewController = new SongPreviewController(new AvaloniaSongPreviewUiAdapter(this));
+        try {
+            audioEngine = new OpenAlAudioEngine();
+            songPreviewController = new AvaloniaOpenAlSongPreviewController(audioEngine, new AvaloniaSongPreviewUiAdapter(this));
+        } catch {
+            audioEngine = null;
+            songPreviewController = null;
+        }
 
         Content = BuildRoot();
         PropertyChanged += OnMainWindowPropertyChanged;
@@ -490,11 +482,8 @@ public sealed partial class MainWindow : Window {
     }
 
     public void LoadSettingsFile(bool reloadWaveforms = false) {
-        var preferredPlaybackDeviceId = userSettings.GetValueForKey(UserSettingsKey.PlaybackDeviceID);
-        var matchingDevice = PlaybackDevices.FirstOrDefault(device => string.Equals(device.Id, preferredPlaybackDeviceId, StringComparison.Ordinal));
-
-        PlaybackDeviceId = matchingDevice?.Id;
-        PlayingOnDefaultDevice = matchingDevice == null;
+        PlaybackDeviceId = null;
+        PlayingOnDefaultDevice = true;
         _ = int.TryParse(userSettings.GetValueForKey(UserSettingsKey.EditorAudioLatency), NumberStyles.Integer, CultureInfo.InvariantCulture, out editorAudioLatency);
 
         suppressControlEvents = true;
@@ -539,7 +528,7 @@ public sealed partial class MainWindow : Window {
             songPositionTimer.Stop();
             playbackClock.Stop();
             songIsPlaying = false;
-            songPlayer?.Pause();
+            StopSongPlayer();
             noteScanner?.Stop();
             beatScanner?.Stop();
             SetSongPosition(finalPosition, updateSlider: true, updateNavWaveform: false);
@@ -552,7 +541,7 @@ public sealed partial class MainWindow : Window {
 
     public void RestartDrummer() {
         var oldDrummer = drummer;
-        drummer = CreateParallelAudioPlayer(
+        drummer = CreateAudioCuePlayer(
             userSettings.GetValueForKey(UserSettingsKey.DrumSampleFile) ?? DefaultUserSettings.DrumSampleFile,
             Audio.NotePlaybackStreams,
             userSettings.GetBoolForKey(UserSettingsKey.PanDrumSounds),
@@ -1874,9 +1863,6 @@ public sealed partial class MainWindow : Window {
 
     void OnSongTempoSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
         if (e.Property == RangeBase.ValueProperty) {
-            if (songTempoStream != null) {
-                songTempoStream.Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo);
-            }
             noteScanner?.SetTempo(SliderSongTempo.Value);
             beatScanner?.SetTempo(SliderSongTempo.Value);
             UpdateSongTempoText();
@@ -1914,14 +1900,6 @@ public sealed partial class MainWindow : Window {
     void SetSongPosition(double milliseconds, bool updateSlider = true, bool updateNavWaveform = true, bool updateEditorScroll = true) {
         var clamped = Math.Max(0, Math.Min(SliderSongProgress.Maximum, milliseconds));
         currentSongPositionMilliseconds = clamped;
-
-        if (!songIsPlaying && songStream != null) {
-            try {
-                songStream.CurrentTime = TimeSpan.FromMilliseconds(clamped);
-            } catch {
-                songStream.CurrentTime = TimeSpan.Zero;
-            }
-        }
 
         suppressControlEvents = true;
         if (updateSlider) {
@@ -2575,14 +2553,13 @@ public sealed partial class MainWindow : Window {
         UnloadSongAudio();
         InvalidateEditorAudioVisuals(clearVisuals: true);
 
-        if (deviceEnumerator != null && deviceChangeListener != null) {
-            deviceEnumerator.UnregisterEndpointNotificationCallback(deviceChangeListener);
-        }
-        deviceChangeListener?.Dispose();
-        deviceChangeListener = null;
-        deviceEnumerator?.Dispose();
-        deviceEnumerator = null;
         songPlaybackCancellationTokenSource.Dispose();
+        songPlayerSource?.Dispose();
+        songPlayerSource = null;
+        songPlayerBuffer?.Dispose();
+        songPlayerBuffer = null;
+        audioEngine?.Dispose();
+        audioEngine = null;
         coverPreviewBitmap?.Dispose();
         coverPreviewBitmap = null;
         foreach (var bitmap in resourceBitmapCache.Values) {
@@ -2592,43 +2569,6 @@ public sealed partial class MainWindow : Window {
         mapEditor?.Dispose();
     }
 
-    IReadOnlyList<PlaybackDeviceOption> ResolvePlaybackDevices() {
-        if (deviceEnumerator == null) {
-            return [];
-        }
-
-        try {
-            return deviceEnumerator
-                .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
-                .Select(device => new PlaybackDeviceOption(device.ID, device.FriendlyName))
-                .ToList();
-        } catch {
-            return [];
-        }
-    }
-
-    MMDevice? GetPlaybackDevice() {
-        if (!OperatingSystem.IsWindows() || deviceEnumerator == null) {
-            return null;
-        }
-
-        if (!string.IsNullOrWhiteSpace(PlaybackDeviceId)) {
-            try {
-                var preferredDevice = deviceEnumerator.GetDevice(PlaybackDeviceId);
-                if (preferredDevice.State.HasFlag(DeviceState.Active)) {
-                    return preferredDevice;
-                }
-            } catch {
-            }
-        }
-
-        try {
-            return deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-        } catch {
-            return null;
-        }
-    }
-
     void LoadSongAudio() {
         UnloadSongAudio();
         InvalidateEditorAudioVisuals(clearVisuals: true);
@@ -2636,78 +2576,42 @@ public sealed partial class MainWindow : Window {
         var songPath = CurrentSongPath;
         currentSongDurationSeconds = ResolveSongDurationSeconds();
         UpdateSongDurationText();
-        if (string.IsNullOrWhiteSpace(songPath) || !File.Exists(songPath) || !OperatingSystem.IsWindows()) {
-            return;
-        }
-
-        songStream = new VorbisWaveReader(songPath);
-        songTempoStream = new SoundTouchWaveStream(songStream) {
-            Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo)
-        };
-        songChannel = new SampleChannel(songTempoStream) {
-            Volume = (float)Math.Clamp(SliderSongVol.Value, 0, 1)
-        };
-        currentSongDurationSeconds = Math.Max(1, (int)songStream.TotalTime.TotalSeconds + 1);
-        if (mapEditor != null && (int)GetMapDouble("_songApproximativeDuration") != (int)currentSongDurationSeconds) {
-            mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject((int)currentSongDurationSeconds));
-        }
-        UpdateSongDurationText();
-
         SliderSongProgress.Minimum = 0;
-        SliderSongProgress.Maximum = songStream.TotalTime.TotalSeconds * 1000;
-        InitSongPlayer();
+        SliderSongProgress.Maximum = currentSongDurationSeconds * 1000;
+        if (!string.IsNullOrWhiteSpace(songPath) && File.Exists(songPath) && audioEngine != null) {
+            try {
+                songPlayerBuffer = audioEngine.LoadVorbisBuffer(songPath);
+                songPlayerSource = audioEngine.CreateSource();
+            } catch {
+                songPlayerBuffer?.Dispose();
+                songPlayerBuffer = null;
+                songPlayerSource?.Dispose();
+                songPlayerSource = null;
+            }
+        }
         InvalidateEditorAudioVisuals();
     }
 
-    void InitSongPlayer() {
-        var oldSongPlayer = songPlayer;
-        songPlayer = null;
-        oldSongPlayer?.Stop();
-        oldSongPlayer?.Dispose();
-
-        var device = GetPlaybackDevice();
-        if (device == null || songChannel == null) {
-            return;
-        }
-
-        songPlayer = new WasapiOut(device, AudioClientShareMode.Shared, true, Audio.WASAPILatencyTarget);
-        songPlayer.Init(songChannel);
-    }
-
     void UnloadSongAudio() {
-        var oldSongPlayer = songPlayer;
-        songPlayer = null;
-        oldSongPlayer?.Stop();
-        oldSongPlayer?.Dispose();
-
-        songChannel = null;
-
-        songTempoStream?.Dispose();
-        songTempoStream = null;
-
-        songStream?.Dispose();
-        songStream = null;
+        StopSongPlayer();
+        songPlayerSource?.Dispose();
+        songPlayerSource = null;
+        songPlayerBuffer?.Dispose();
+        songPlayerBuffer = null;
         InvalidateEditorAudioVisuals(clearVisuals: true);
     }
 
     void PlaySong() {
-        if (songStream == null || songTempoStream == null || songChannel == null) {
+        if (Helper.DoubleApproxGreaterEqual(SliderSongProgress.Value, SliderSongProgress.Maximum)) {
             return;
         }
 
-        if (Helper.DoubleApproxGreaterEqual(SliderSongProgress.Value, songStream.TotalTime.TotalMilliseconds)) {
-            return;
-        }
-
-        try {
-            songStream.CurrentTime = TimeSpan.FromMilliseconds(SliderSongProgress.Value);
-        } catch {
-            songStream.CurrentTime = TimeSpan.Zero;
-        }
-
-        songTempoStream.Tempo = Math.Clamp(SliderSongTempo.Value, Audio.MinSongTempo, Audio.MaxSongTempo);
         playbackStartMilliseconds = SliderSongProgress.Value;
+        if (!StartSongPlayer(playbackStartMilliseconds)) {
+            return;
+        }
         playbackClock.Restart();
+
         songIsPlaying = true;
         UpdatePlaybackUi();
         songPreviewController?.StopPreview();
@@ -2730,19 +2634,26 @@ public sealed partial class MainWindow : Window {
         songPlaybackCancellationTokenSource = new CancellationTokenSource();
         previousTokenSource.Dispose();
 
-        if (editorAudioLatency == 0 || songTempoStream.CurrentTime > TimeSpan.FromMilliseconds(editorAudioLatency)) {
-            songTempoStream.CurrentTime -= TimeSpan.FromMilliseconds(editorAudioLatency);
-            songPlayer?.Play();
-        } else {
-            songTempoStream.CurrentTime = TimeSpan.Zero;
-            Task.Delay(TimeSpan.FromMilliseconds(editorAudioLatency)).ContinueWith(_ => {
-                if (!songPlaybackCancellationTokenSource.IsCancellationRequested) {
-                    songPlayer?.Play();
-                }
-            }, songPlaybackCancellationTokenSource.Token);
+        songPositionTimer.Start();
+    }
+
+    bool StartSongPlayer(double startMilliseconds) {
+        if (songPlayerBuffer == null || songPlayerSource == null) {
+            return false;
         }
 
-        songPositionTimer.Start();
+        StopSongPlayer();
+        var latencyAdjustedStart = Math.Max(0, startMilliseconds - editorAudioLatency);
+        songPlayerSource.Play(
+            songPlayerBuffer,
+            startSeconds: latencyAdjustedStart / 1000.0,
+            volume: SliderSongVol.Value,
+            pitch: SliderSongTempo.Value);
+        return true;
+    }
+
+    void StopSongPlayer() {
+        songPlayerSource?.Stop();
     }
 
     void UpdatePlaybackPositionFromAudio() {
@@ -2759,10 +2670,6 @@ public sealed partial class MainWindow : Window {
     }
 
     void UpdateAudioVolumes() {
-        if (songChannel != null) {
-            songChannel.Volume = (float)Math.Clamp(SliderSongVol.Value, 0, 1);
-        }
-
         songPreviewController?.UpdateVolume();
         drummer?.ChangeVolume(SliderDrumVol.Value);
         metronome?.ChangeVolume(SliderDrumVol.Value);
@@ -2770,8 +2677,6 @@ public sealed partial class MainWindow : Window {
 
     void ReinitializePlaybackDependencies() {
         playbackDevices.Clear();
-        playbackDevices.AddRange(ResolvePlaybackDevices());
-        InitSongPlayer();
         if (mapEditor != null) {
             songPreviewController?.Restart(mapEditor, songIsPlaying);
         }
@@ -2781,7 +2686,7 @@ public sealed partial class MainWindow : Window {
 
     void RestartMetronome() {
         var oldMetronome = metronome;
-        metronome = CreateParallelAudioPlayer(
+        metronome = CreateAudioCuePlayer(
             Audio.MetronomeFilename,
             Audio.MetronomeStreams,
             isPanned: false,
@@ -2798,22 +2703,19 @@ public sealed partial class MainWindow : Window {
         }
     }
 
-    ParallelAudioPlayer? CreateParallelAudioPlayer(string basePath, int streams, bool isPanned, double defaultVolume, bool isEnabled = true) {
-        var device = GetPlaybackDevice();
-        if (device == null || !OperatingSystem.IsWindows()) {
+    IAudioCuePlayer? CreateAudioCuePlayer(string basePath, int streams, bool isPanned, double defaultVolume, bool isEnabled = true) {
+        if (audioEngine == null) {
             return null;
         }
 
         try {
-            return new ParallelAudioPlayer(
-                device,
+            return new AvaloniaOpenAlAudioCuePlayer(
+                audioEngine,
                 basePath,
                 streams,
-                Audio.WASAPILatencyTarget,
                 isEnabled,
                 isPanned,
-                (float)Math.Clamp(defaultVolume, 0, 1)
-            );
+                defaultVolume);
         } catch {
             return null;
         }
@@ -3655,9 +3557,10 @@ public sealed partial class MainWindow : Window {
 
         try {
             using var vorbisStream = TryOpenVorbis(songPath);
-            var actualDurationSeconds = Math.Max(1, (int)vorbisStream.TotalTime.TotalSeconds + 1);
-            if (mapEditor != null && (int)fallbackDurationSeconds != actualDurationSeconds) {
-                mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject(actualDurationSeconds));
+            var actualDurationSeconds = Math.Max(1, vorbisStream.TotalTime.TotalSeconds);
+            var approximativeDurationSeconds = (int)vorbisStream.TotalTime.TotalSeconds + 1;
+            if (mapEditor != null && (int)fallbackDurationSeconds != approximativeDurationSeconds) {
+                mapEditor.SetMapValue("_songApproximativeDuration", JToken.FromObject(approximativeDurationSeconds));
             }
 
             return actualDurationSeconds;
@@ -3732,10 +3635,6 @@ public sealed partial class MainWindow : Window {
             this.owner = owner;
         }
 
-        public MMDevice GetPlaybackDevice() {
-            return owner.GetPlaybackDevice()!;
-        }
-
         public float GetSongVolume() {
             return (float)owner.SliderSongVol.Value;
         }
@@ -3751,27 +3650,6 @@ public sealed partial class MainWindow : Window {
         public void SetPreviewButtonEnabled(bool isEnabled) {
             owner.BtnPlayPreview.IsEnabled = isEnabled;
             owner.BtnPlayPreview.Opacity = isEnabled ? 1 : 0.6;
-        }
-    }
-
-    sealed class AvaloniaDeviceChangeUiAdapter : IDeviceChangeUiAdapter {
-        readonly MainWindow owner;
-
-        public AvaloniaDeviceChangeUiAdapter(MainWindow owner) {
-            this.owner = owner;
-        }
-
-        public bool PlayingOnDefaultDevice => owner.PlayingOnDefaultDevice;
-        public bool DefaultDeviceAvailable => owner.DefaultDeviceAvailable;
-        public string UserPreferredPlaybackDeviceId => owner.userSettings.GetValueForKey(UserSettingsKey.PlaybackDeviceID) ?? string.Empty;
-        public string PlaybackDeviceId => owner.PlaybackDeviceId ?? string.Empty;
-
-        public void InvokeOnUiThread(Action action) {
-            Dispatcher.UIThread.Post(action);
-        }
-
-        public void UpdatePlaybackDevice(string playbackDeviceId, bool useDefaultDevice) {
-            owner.UpdatePlaybackDevice(playbackDeviceId, useDefaultDevice);
         }
     }
 

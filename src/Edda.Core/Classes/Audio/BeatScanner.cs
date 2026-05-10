@@ -2,7 +2,7 @@ using Edda.Classes.MapEditorNS.NoteNS;
 using System.Collections.Generic;
 
 public class BeatScanner : AudioScanner {
-    public BeatScanner(ParallelAudioPlayer parallelAudioPlayer, double tempo) : base(parallelAudioPlayer, tempo) {
+    public BeatScanner(IAudioCuePlayer parallelAudioPlayer, double tempo) : base(parallelAudioPlayer, tempo) {
     }
 
     public void Start(int millisecStart, List<double> beats, double globalBPM) {

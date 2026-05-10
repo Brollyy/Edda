@@ -28,6 +28,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Edda.App\Classes\Audio\Adapters\NAudioAudioFileServices.cs" Link="Classes\Adapters\Audio\NAudioAudioFileServices.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="..\Edda.Core\Resources\*.png" Link="Resources\%(Filename)%(Extension)" />
 
     <Content Include="..\Edda.Core\Resources\*.wav" Link="Resources\%(Filename)%(Extension)">

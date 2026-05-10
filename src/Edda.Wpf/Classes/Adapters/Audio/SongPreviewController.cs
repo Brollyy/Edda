@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 namespace Edda {
     public class SongPreviewController : IDisposable {
-        readonly ISongPreviewUiAdapter uiAdapter;
+        readonly WpfSongPreviewUiAdapter uiAdapter;
 
         // audio playback state
         SampleChannel previewChannel;
@@ -22,7 +22,7 @@ namespace Edda {
         bool previewIsPlaying;
 
         // constructor
-        public SongPreviewController(ISongPreviewUiAdapter uiAdapter) {
+        public SongPreviewController(WpfSongPreviewUiAdapter uiAdapter) {
             this.uiAdapter = uiAdapter;
         }
 

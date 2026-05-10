@@ -1,6 +1,6 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Themes.Fluent;
+using Avalonia.Markup.Xaml;
 using System;
 
 namespace Edda.Avalonia;
@@ -11,7 +11,8 @@ public sealed partial class App : global::Avalonia.Application {
     public AppSession? Session { get; private set; }
 
     public override void Initialize() {
-        Styles.Add(new FluentTheme());
+        AvaloniaXamlLoader.Load(this);
+        RequestedThemeVariant = global::Avalonia.Styling.ThemeVariant.Light;
     }
 
     public override void OnFrameworkInitializationCompleted() {

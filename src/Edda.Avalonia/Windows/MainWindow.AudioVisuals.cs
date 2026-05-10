@@ -4,21 +4,18 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
+using Edda.Avalonia.Services;
 using Edda.Const;
 using NAudio.Vorbis;
-using DrawingBitmap = System.Drawing.Bitmap;
-using DrawingColor = System.Drawing.Color;
-using DrawingGraphics = System.Drawing.Graphics;
-using DrawingPen = System.Drawing.Pen;
-using DrawingRectangle = System.Drawing.Rectangle;
-using InterpolationMode = System.Drawing.Drawing2D.InterpolationMode;
-using PixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace Edda.Avalonia.Windows;
 
@@ -375,11 +372,7 @@ public sealed partial class MainWindow {
         }
 
         using var reader = new VorbisWaveReader(filePath);
-        using var bitmap = new DrawingBitmap(bitmapWidth, bitmapHeight, PixelFormat.Format32bppPArgb);
-        using var graphics = DrawingGraphics.FromImage(bitmap);
-        using var pen = new DrawingPen(DrawingColor.FromArgb(color.A, color.R, color.G, color.B), (float)Editor.Waveform.ThicknessWPF);
-
-        graphics.Clear(DrawingColor.Transparent);
+        var pixels = new byte[bitmapWidth * bitmapHeight * 4];
 
         var channels = Math.Max(1, reader.WaveFormat.Channels);
         var bytesPerSample = Math.Max(1, reader.WaveFormat.BitsPerSample / 8 * channels);
@@ -421,11 +414,11 @@ public sealed partial class MainWindow {
                 highValue = Math.Min(bitmapWidth, bitmapWidth - 4);
             }
 
-            var y = bitmapHeight - pixel;
-            graphics.DrawLine(pen, lowValue, y, highValue, y);
+            var y = bitmapHeight - 1 - pixel;
+            DrawHorizontalLine(pixels, bitmapWidth, bitmapHeight, (int)Math.Round(lowValue), (int)Math.Round(highValue), y, color);
         }
 
-        return ConvertDrawingBitmap(bitmap);
+        return CreateBitmapFromBgraPixels(bitmapWidth, bitmapHeight, pixels);
     }
 
     static AvaloniaSpectrogramRenderResult? RenderSpectrogramChunks(
@@ -447,28 +440,61 @@ public sealed partial class MainWindow {
             colormap,
             flipped,
             numChunks,
-            token);
+            token,
+            new NAudioAudioFileServices());
 
         if (bitmapSet == null) {
             return null;
         }
 
-        var chunkBitmaps = new Bitmap[bitmapSet.Bitmaps.Count];
-        for (var i = 0; i < bitmapSet.Bitmaps.Count; i++) {
+        var chunkBitmaps = new Bitmap[bitmapSet.Chunks.Count];
+        for (var i = 0; i < bitmapSet.Chunks.Count; i++) {
             token.ThrowIfCancellationRequested();
-            chunkBitmaps[i] = ConvertDrawingBitmap(bitmapSet.Bitmaps[i])!;
+            var chunk = bitmapSet.Chunks[i];
+            chunkBitmaps[i] = CreateBitmapFromBgraPixels(chunk.Width, chunk.Height, chunk.BgraPixels);
         }
 
         return new AvaloniaSpectrogramRenderResult(
-            global::Avalonia.Media.Color.FromArgb(bitmapSet.BackgroundColor.A, bitmapSet.BackgroundColor.R, bitmapSet.BackgroundColor.G, bitmapSet.BackgroundColor.B),
+            global::Avalonia.Media.Color.FromRgb(bitmapSet.BackgroundColor.R, bitmapSet.BackgroundColor.G, bitmapSet.BackgroundColor.B),
             chunkBitmaps);
     }
 
-    static Bitmap? ConvertDrawingBitmap(DrawingBitmap drawingBitmap) {
-        using var stream = new MemoryStream();
-        drawingBitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-        stream.Position = 0;
-        return new Bitmap(stream);
+    static void DrawHorizontalLine(byte[] pixels, int width, int height, int x1, int x2, int y, global::Avalonia.Media.Color color) {
+        if (y < 0 || y >= height) {
+            return;
+        }
+
+        var start = Math.Clamp(Math.Min(x1, x2), 0, width - 1);
+        var end = Math.Clamp(Math.Max(x1, x2), 0, width - 1);
+        for (var x = start; x <= end; x++) {
+            var offset = ((y * width) + x) * 4;
+            pixels[offset] = Premultiply(color.B, color.A);
+            pixels[offset + 1] = Premultiply(color.G, color.A);
+            pixels[offset + 2] = Premultiply(color.R, color.A);
+            pixels[offset + 3] = color.A;
+        }
+    }
+
+    static byte Premultiply(byte component, byte alpha) {
+        return (byte)Math.Round(component * alpha / 255.0);
+    }
+
+    static Bitmap CreateBitmapFromBgraPixels(int width, int height, byte[] pixels) {
+        var bitmap = new WriteableBitmap(
+            new PixelSize(width, height),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            AlphaFormat.Premul);
+        using var lockedBitmap = bitmap.Lock();
+        var sourceRowBytes = width * 4;
+        for (var row = 0; row < height; row++) {
+            Marshal.Copy(
+                pixels,
+                row * sourceRowBytes,
+                lockedBitmap.Address + (row * lockedBitmap.RowBytes),
+                Math.Min(sourceRowBytes, lockedBitmap.RowBytes));
+        }
+        return bitmap;
     }
 
     static (int width, int height) ScaleBitmapDimensions(double width, double height) {

@@ -13,9 +13,16 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.12" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
+    <PackageReference Include="NAudio" Version="2.1.0" />
+    <PackageReference Include="NAudio.Vorbis" Version="1.5.0" />
+    <PackageReference Include="OpenTK.Audio.OpenAL" Version="4.9.4" />
     <PackageReference Include="Spectrogram" Version="1.6.1" />
     <ProjectReference Include="..\Edda.Core\Edda.Core.csproj" />
     <ProjectReference Include="..\Edda.App\Edda.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Edda.App\Classes\Audio\Adapters\NAudioAudioFileServices.cs" Link="Services\NAudioAudioFileServices.cs" />
   </ItemGroup>
 
   <ItemGroup>

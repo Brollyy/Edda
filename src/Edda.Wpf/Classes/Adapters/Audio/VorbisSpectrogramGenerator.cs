@@ -1,4 +1,5 @@
 ﻿using Edda.Const;
+using Edda;
 using NAudio.Vorbis;
 using Spectrogram;
 using System;
@@ -94,10 +95,11 @@ public class VorbisSpectrogramGenerator : IDisposable {
                     colormap,
                     drawFlipped,
                     numChunks,
-                    tokenSource.Token);
+                    tokenSource.Token,
+                    new NAudioAudioFileServices());
 
-                cachedSpectrograms = bitmapSet?.Bitmaps
-                    .Select(BitmapToImageSource)
+                cachedSpectrograms = bitmapSet?.Chunks
+                    .Select(ChunkToImageSource)
                     .ToArray();
             } catch (OperationCanceledException) {
                 isDrawing = false;
@@ -114,6 +116,18 @@ public class VorbisSpectrogramGenerator : IDisposable {
         }
 
         return cachedSpectrograms;
+    }
+
+    static BitmapSource ChunkToImageSource(Edda.SpectrogramPixelChunk chunk) {
+        return BitmapSource.Create(
+            chunk.Width,
+            chunk.Height,
+            96,
+            96,
+            PixelFormats.Bgra32,
+            null,
+            chunk.BgraPixels,
+            chunk.Width * 4);
     }
 
     private static Edda.VorbisSpectrogramBitmapRenderer.SpectrogramType MapType(SpectrogramType type) {

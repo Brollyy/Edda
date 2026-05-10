@@ -5,7 +5,7 @@ using NAudio.Wave.SampleProviders;
 using System;
 using System.IO;
 
-public class ParallelAudioPlayer : IDisposable {
+public class ParallelAudioPlayer : IAudioCuePlayer {
     const int numChannels = 4;
     const float maxPan = Audio.MaxPanDistance;
     int streams;

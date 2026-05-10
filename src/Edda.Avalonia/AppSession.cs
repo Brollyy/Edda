@@ -50,7 +50,7 @@ public sealed class AppSession {
         return new AppSession(
             new global::RecentOpenedFolders(CoreProgram.RecentOpenedMapsFile, CoreProgram.MaxRecentOpenedMaps),
             userSettings,
-            new MapWorkspaceService(),
+            new MapWorkspaceService(new NAudioAudioFileServices()),
             new StorageProviderFilePickerService(),
             new WindowDialogService(),
             lifetime

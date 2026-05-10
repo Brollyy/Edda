@@ -17,15 +17,15 @@ public class AudioScanner : IDisposable {
     protected double globalBPM;
     public List<Note> notes;
 
-    ParallelAudioPlayer parallelAudioPlayer;
+    IAudioCuePlayer parallelAudioPlayer;
 
-    public AudioScanner(ParallelAudioPlayer parallelAudioPlayer, double tempo) {
+    public AudioScanner(IAudioCuePlayer parallelAudioPlayer, double tempo) {
         SetAudioPlayer(parallelAudioPlayer);
         this.stopwatch = new Stopwatch();
         this.tempo = tempo;
     }
 
-    public AudioScanner(ParallelAudioPlayer parallelAudioPlayer)
+    public AudioScanner(IAudioCuePlayer parallelAudioPlayer)
         : this(parallelAudioPlayer, 1.0) { }
 
     public virtual void Dispose() {
@@ -44,7 +44,7 @@ public class AudioScanner : IDisposable {
         tempo = newTempo;
     }
 
-    public void SetAudioPlayer(ParallelAudioPlayer parallelAudioPlayer) {
+    public void SetAudioPlayer(IAudioCuePlayer parallelAudioPlayer) {
         this.parallelAudioPlayer = parallelAudioPlayer;
     }
 

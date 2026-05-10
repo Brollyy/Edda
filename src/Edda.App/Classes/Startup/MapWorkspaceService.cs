@@ -1,13 +1,18 @@
 using System;
 using System.IO;
 using Edda.Const;
-using NAudio.Vorbis;
 
 namespace Edda.Startup;
 
 #nullable enable
 
 public sealed class MapWorkspaceService {
+    readonly ISongAudioMetadataReader audioMetadataReader;
+
+    public MapWorkspaceService(ISongAudioMetadataReader audioMetadataReader) {
+        this.audioMetadataReader = audioMetadataReader;
+    }
+
     public MapDocumentSummary CreateNewMap(string mapFolder, string songFilePath) {
         if (string.IsNullOrWhiteSpace(mapFolder)) {
             throw new ArgumentException("A target map folder is required.", nameof(mapFolder));
@@ -19,8 +24,8 @@ public sealed class MapWorkspaceService {
 
         Directory.CreateDirectory(mapFolder);
 
-        using var vorbisStream = TryOpenVorbis(songFilePath);
-        if (vorbisStream.TotalTime.TotalHours >= 1) {
+        var duration = audioMetadataReader.GetDuration(songFilePath);
+        if (duration.TotalHours >= 1) {
             throw new InvalidDataException("Songs over 1 hour in duration are not supported.");
         }
 
@@ -28,7 +33,7 @@ public sealed class MapWorkspaceService {
         var songFileName = Helper.SanitiseSongFileName(songFilePath);
         var destinationSongPath = Path.Combine(mapFolder, songFileName);
 
-        beatmap.SetValue("_songApproximativeDuration", (int)vorbisStream.TotalTime.TotalSeconds + 1);
+        beatmap.SetValue("_songApproximativeDuration", (int)duration.TotalSeconds + 1);
         beatmap.SetValue("_songFilename", songFileName);
 
         CopyIfNeeded(songFilePath, destinationSongPath);
@@ -70,14 +75,6 @@ public sealed class MapWorkspaceService {
         );
     }
 
-    private static VorbisWaveReader TryOpenVorbis(string songFilePath) {
-        try {
-            return new VorbisWaveReader(songFilePath);
-        } catch (Exception ex) {
-            throw new InvalidDataException("The .ogg file is corrupted.", ex);
-        }
-    }
-
     private static void CopyIfNeeded(string sourceSongPath, string destinationSongPath) {
         var sourceFullPath = Path.GetFullPath(sourceSongPath);
         var destinationFullPath = Path.GetFullPath(destinationSongPath);
@@ -92,9 +89,8 @@ public sealed class MapWorkspaceService {
         File.Copy(sourceFullPath, destinationFullPath, overwrite: true);
     }
 
-    private static void ApplyVorbisMetadata(RagnarockMap beatmap, string songFilePath) {
-        using var tagReader = new VorbisSampleProvider(File.OpenRead(songFilePath), closeOnDispose: true);
-        var tags = tagReader.Tags;
+    private void ApplyVorbisMetadata(RagnarockMap beatmap, string songFilePath) {
+        var tags = audioMetadataReader.ReadTags(songFilePath);
         if (!string.IsNullOrWhiteSpace(tags.Artist)) {
             beatmap.SetValue("_songAuthorName", tags.Artist);
         }

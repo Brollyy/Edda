@@ -14,6 +14,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
+using Edda.Avalonia.Services;
 using Edda.Classes.MapEditorNS;
 using Edda.Classes.MapEditorNS.NoteNS;
 using Edda.Classes.MapEditorNS.Stats;
@@ -51,6 +52,8 @@ public sealed partial class MainWindow {
     Line editorMouseoverLine = null!;
     global::Avalonia.Controls.Image editorPreviewNote = null!;
     global::Avalonia.Controls.Image scrollEditorHoldIcon = null!;
+    TranslateTransform editorPlaybackScrollTransform = null!;
+    TranslateTransform spectrogramPlaybackScrollTransform = null!;
     readonly Dictionary<string, global::Avalonia.Controls.Image> editorNoteVisuals = new(StringComparer.Ordinal);
     readonly Dictionary<string, Rectangle> navNoteVisuals = new(StringComparer.Ordinal);
     readonly List<double> editorGridBeatLines = new();
@@ -80,9 +83,11 @@ public sealed partial class MainWindow {
     bool editorPointerPressed;
     bool editorDragSelectionActive;
     bool editorLayoutRefreshQueued;
+    bool editorPostLayoutRefreshQueued;
     bool suppressNextEditorClick;
     bool suppressEditorScrollSync;
     bool suppressSpectrogramScrollSync;
+    double playbackCanvasScrollOffset = double.NaN;
     Point? editorSelectionStart;
     EditorMarkerDescriptor? editorDraggedMarker;
     Control? editorDraggedMarkerControl;
@@ -116,6 +121,8 @@ public sealed partial class MainWindow {
             Background = Brushes.Transparent,
             Focusable = true
         };
+        editorPlaybackScrollTransform = new TranslateTransform();
+        scrollEditorRoot.RenderTransform = editorPlaybackScrollTransform;
 
         mainWaveformCanvas = AutomationHelper.WithAutomationId(new Canvas {
             Name = "MainWaveform",
@@ -370,21 +377,70 @@ public sealed partial class MainWindow {
         }, DispatcherPriority.Background);
     }
 
+    void QueuePostLayoutEditorSurfaceRefresh() {
+        if (editorPostLayoutRefreshQueued) {
+            return;
+        }
+
+        editorPostLayoutRefreshQueued = true;
+        Dispatcher.UIThread.Post(() => {
+            editorPostLayoutRefreshQueued = false;
+            if (mapEditor?.currentMapDifficulty != null) {
+                RefreshEditorSurface();
+            } else {
+                ApplyEditorLayoutMetrics(refreshSurface: false);
+            }
+        }, DispatcherPriority.Loaded);
+    }
+
     internal void SyncEditorScrollToCurrentBeat() {
         if (scrollEditor == null || editorPointerPressed) {
             return;
         }
 
         try {
-            var ratio = SliderSongProgress.Maximum <= 0
-                ? 0
-                : Math.Clamp(currentSongPositionMilliseconds / SliderSongProgress.Maximum, 0, 1);
+            var targetOffset = GetEditorScrollOffsetForCurrentSongPosition();
+            if (songIsPlaying) {
+                ApplyPlaybackCanvasScroll(targetOffset);
+                return;
+            }
+
             suppressEditorScrollSync = true;
-            scrollEditor.Offset = new Vector(0, (1 - ratio) * GetEditorMaxScrollOffset());
+            scrollEditor.Offset = new Vector(0, targetOffset);
             suppressEditorScrollSync = false;
-            SyncSpectrogramScrollToEditor();
+            SyncSpectrogramScrollToEditor(invalidateWaveform: !songIsPlaying);
         } catch (Exception) {
             suppressEditorScrollSync = false;
+        }
+    }
+
+    double GetEditorScrollOffsetForCurrentSongPosition() {
+        var ratio = SliderSongProgress.Maximum <= 0
+            ? 0
+            : Math.Clamp(currentSongPositionMilliseconds / SliderSongProgress.Maximum, 0, 1);
+        return (1 - ratio) * GetEditorMaxScrollOffset();
+    }
+
+    void ApplyPlaybackCanvasScroll(double targetOffset) {
+        if (scrollEditor == null || scrollEditorRoot == null || editorPlaybackScrollTransform == null) {
+            return;
+        }
+
+        var clampedOffset = Math.Clamp(targetOffset, 0, GetEditorMaxScrollOffset());
+        playbackCanvasScrollOffset = clampedOffset;
+        editorPlaybackScrollTransform.Y = scrollEditor.Offset.Y - clampedOffset;
+        if (scrollSpectrogram != null && spectrogramPlaybackScrollTransform != null) {
+            spectrogramPlaybackScrollTransform.Y = scrollSpectrogram.Offset.Y - clampedOffset;
+        }
+    }
+
+    void ResetPlaybackCanvasScroll() {
+        playbackCanvasScrollOffset = double.NaN;
+        if (editorPlaybackScrollTransform != null) {
+            editorPlaybackScrollTransform.Y = 0;
+        }
+        if (spectrogramPlaybackScrollTransform != null) {
+            spectrogramPlaybackScrollTransform.Y = 0;
         }
     }
 
@@ -670,6 +726,7 @@ public sealed partial class MainWindow {
             Stretch = Stretch.Fill,
             IsHitTestVisible = false
         };
+        control.SetValue(Visual.ZIndexProperty, 10);
 
         AutomationProperties.SetName(control, $"Note {note.col + 1}");
         AutomationHelper.SetItemStatus(control, "hit:0|opacity:1");
@@ -818,23 +875,27 @@ public sealed partial class MainWindow {
             Tag = new EditorMarkerDescriptor(bookmark, null),
             IsHitTestVisible = false
         };
+        marker.SetValue(Visual.ZIndexProperty, 30);
         AutomationProperties.SetName(marker, "Bookmark");
 
-        var lineY = EditorMarkerHeight / 2;
+        var lineY = GetMarkerLineY(marker, new EditorMarkerDescriptor(bookmark, null));
         marker.Children.Add(new Line {
             StartPoint = new Point(0, lineY),
             EndPoint = new Point(markerWidth, lineY),
             Stroke = ResolveBrush(null, Editor.GridBookmark.Colour, opacity: Editor.GridBookmark.Opacity),
             StrokeThickness = Editor.GridBookmark.Thickness
         });
-        marker.Children.Add(CreateMarkerLabel(
+        var label = CreateMarkerLabel(
             bookmark.name,
-            markerWidth,
-            EditorMarkerHeight,
+            null,
+            18,
             TextAlignment.Right,
             ResolveBrush(null, Editor.GridBookmark.NameColour, opacity: Editor.GridBookmark.Opacity),
             Editor.GridBookmark.NameSize,
-            Editor.GridBookmark.NamePadding));
+            Editor.GridBookmark.NamePadding);
+        Canvas.SetLeft(label, Math.Max(0, markerWidth - label.Width));
+        Canvas.SetTop(label, lineY - label.Height - (0.75 * Editor.GridBookmark.Thickness));
+        marker.Children.Add(label);
 
         Canvas.SetLeft(marker, GetEditorBookmarkMarkerLeft());
         SetMarkerCanvasTop(marker, bookmark.beat);
@@ -850,6 +911,7 @@ public sealed partial class MainWindow {
             Tag = new EditorMarkerDescriptor(null, bpmChange),
             IsHitTestVisible = false
         };
+        marker.SetValue(Visual.ZIndexProperty, 30);
         AutomationProperties.SetName(marker, $"1/{Math.Max(1, bpmChange.gridDivision)} beat");
 
         var lineY = timingMarkerHeight - Math.Max(2, Editor.GridBPMChange.Thickness);
@@ -1120,11 +1182,19 @@ public sealed partial class MainWindow {
     }
 
     void SetMarkerCanvasTop(Control markerControl, double beat) {
-        var markerLineY = markerControl.Tag is EditorMarkerDescriptor { BpmChange: not null }
-            ? markerControl.Height - Math.Max(2, Editor.GridBPMChange.Thickness)
+        var markerLineY = markerControl.Tag is EditorMarkerDescriptor descriptor
+            ? GetMarkerLineY(markerControl, descriptor)
             : markerControl.Height / 2;
 
         Canvas.SetTop(markerControl, BeatToCanvasY(beat) - markerLineY);
+    }
+
+    static double GetMarkerLineY(Control markerControl, EditorMarkerDescriptor descriptor) {
+        if (descriptor.BpmChange != null) {
+            return markerControl.Height - Math.Max(2, Editor.GridBPMChange.Thickness);
+        }
+
+        return markerControl.Height - Math.Max(2, Editor.GridBookmark.Thickness);
     }
 
     Bitmap? GetRuneBitmap(double beat, bool isHighlighted) {
@@ -1172,7 +1242,35 @@ public sealed partial class MainWindow {
 
         var point = e.GetCurrentPoint(scrollEditorInputLayer);
         if (!songIsPlaying &&
+            point.Properties.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed) {
+            var pressedMarkerControl = FindMarkerControlAtPosition(hoverState.position);
+            if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { Bookmark: { } bookmark } }) {
+                BeginDeleteBookmark(bookmark);
+                e.Handled = true;
+                return;
+            }
+            if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { BpmChange: { } bpmChange } }) {
+                BeginDeleteTimingChange(bpmChange);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (!songIsPlaying &&
             (point.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed || point.Properties.IsRightButtonPressed)) {
+            var pressedMarkerControl = FindMarkerControlAtPosition(hoverState.position);
+            if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { Bookmark: { } bookmark } }) {
+                BeginEditBookmark(bookmark, hoverState.position);
+                e.Handled = true;
+                return;
+            }
+            if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { BpmChange: { } bpmChange } } &&
+                TryResolveTimingChangeEditKind(pressedMarkerControl, hoverState.position, out var editKind)) {
+                BeginEditTimingChange(bpmChange, editKind, hoverState.position);
+                e.Handled = true;
+                return;
+            }
+
             RemoveHoveredNote();
             e.Handled = true;
             return;
@@ -1184,6 +1282,14 @@ public sealed partial class MainWindow {
             return;
         }
 
+        var markerControl = FindMarkerControlAtPosition(hoverState.position);
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+            point.Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed &&
+            TrySelectNotesForEditorMarker(markerControl)) {
+            e.Handled = true;
+            return;
+        }
+
         FocusEditorSurface();
         e.Pointer.Capture(scrollEditorInputLayer);
         editorCapturedPointer = e.Pointer;
@@ -1192,7 +1298,6 @@ public sealed partial class MainWindow {
         suppressNextEditorClick = false;
         editorSelectionStart = hoverState.position;
 
-        var markerControl = FindMarkerControlAtPosition(hoverState.position);
         if (markerControl is { Tag: EditorMarkerDescriptor descriptor }) {
             editorDraggedMarker = descriptor;
             editorDraggedMarkerControl = markerControl;
@@ -1202,6 +1307,24 @@ public sealed partial class MainWindow {
         }
 
         e.Handled = true;
+    }
+
+    bool TrySelectNotesForEditorMarker(Control? markerControl) {
+        if (mapEditor == null || markerControl is not { Tag: EditorMarkerDescriptor descriptor }) {
+            return false;
+        }
+
+        if (descriptor.Bookmark != null) {
+            mapEditor.SelectNotesInBookmark(descriptor.Bookmark);
+            return true;
+        }
+
+        if (descriptor.BpmChange != null) {
+            mapEditor.SelectNotesInBPMChange(descriptor.BpmChange);
+            return true;
+        }
+
+        return false;
     }
 
     void OnScrollEditorPointerMoved(object? sender, PointerEventArgs e) {
@@ -1389,6 +1512,147 @@ public sealed partial class MainWindow {
         editorDraggedMarkerControl = null;
         scrollEditorSelection.IsVisible = false;
         UpdateEditorHoverVisuals();
+    }
+
+    void BeginDeleteBookmark(Bookmark bookmark) {
+        appSession.ShowYesNoConfirmation(
+            this,
+            "Confirm Deletion",
+            "Are you sure you want to delete this bookmark?",
+            result => {
+                if (result == AppDialogResult.Yes) {
+                    mapEditor?.RemoveBookmark(bookmark);
+                }
+            });
+    }
+
+    void BeginDeleteTimingChange(BPMChange bpmChange) {
+        appSession.ShowYesNoConfirmation(
+            this,
+            "Confirm Deletion",
+            "Are you sure you want to delete this timing change?",
+            result => {
+                if (result == AppDialogResult.Yes) {
+                    mapEditor?.RemoveBPMChange(bpmChange);
+                }
+            });
+    }
+
+    void BeginEditBookmark(Bookmark bookmark, Point pointerPosition) {
+        if (scrollEditorCanvas == null || mapEditor == null) {
+            return;
+        }
+
+        var textBox = new TextBox {
+            Text = bookmark.name,
+            FontSize = Editor.GridBookmark.NameSize,
+            Width = 120,
+            Height = 22
+        };
+        textBox.GotFocus += (_, _) => textInputHasFocus = true;
+        textBox.LostFocus += (_, _) => {
+            textInputHasFocus = false;
+            if (!string.IsNullOrWhiteSpace(textBox.Text)) {
+                mapEditor.RenameBookmark(bookmark, textBox.Text);
+            }
+            scrollEditorCanvas.Children.Remove(textBox);
+        };
+        textBox.KeyDown += (_, e) => {
+            if (e.Key == Key.Escape || e.Key == Key.Enter) {
+                FocusEditorSurface();
+                e.Handled = true;
+            }
+        };
+
+        Canvas.SetLeft(textBox, Math.Clamp(pointerPosition.X, 0, Math.Max(0, GetEditorViewportWidth() - textBox.Width)));
+        Canvas.SetTop(textBox, Math.Clamp(pointerPosition.Y - (textBox.Height / 2), 0, Math.Max(0, GetEditorContentHeight() - textBox.Height)));
+        scrollEditorCanvas.Children.Add(textBox);
+        FocusInlineMarkerTextBox(textBox);
+    }
+
+    void BeginEditTimingChange(BPMChange bpmChange, TimingChangeEditKind editKind, Point pointerPosition) {
+        if (scrollEditorCanvas == null || mapEditor == null) {
+            return;
+        }
+
+        var textBox = new TextBox {
+            Text = editKind == TimingChangeEditKind.GridDivision
+                ? Math.Max(1, bpmChange.gridDivision).ToString(CultureInfo.InvariantCulture)
+                : FormatNumber(bpmChange.BPM),
+            FontSize = Editor.GridBPMChange.NameSize,
+            Width = editKind == TimingChangeEditKind.GridDivision ? 44 : 64,
+            Height = 22
+        };
+        textBox.GotFocus += (_, _) => textInputHasFocus = true;
+        textBox.LostFocus += (_, _) => {
+            textInputHasFocus = false;
+            CommitTimingChangeEdit(bpmChange, editKind, textBox.Text);
+            scrollEditorCanvas.Children.Remove(textBox);
+        };
+        textBox.KeyDown += (_, e) => {
+            if (e.Key == Key.Escape || e.Key == Key.Enter) {
+                FocusEditorSurface();
+                e.Handled = true;
+            }
+        };
+
+        Canvas.SetLeft(textBox, Math.Clamp(pointerPosition.X, 0, Math.Max(0, GetEditorViewportWidth() - textBox.Width)));
+        Canvas.SetTop(textBox, Math.Clamp(pointerPosition.Y - (textBox.Height / 2), 0, Math.Max(0, GetEditorContentHeight() - textBox.Height)));
+        scrollEditorCanvas.Children.Add(textBox);
+        FocusInlineMarkerTextBox(textBox);
+    }
+
+    void FocusInlineMarkerTextBox(TextBox textBox) {
+        if (scrollEditor == null) {
+            textBox.Focus();
+            textBox.SelectAll();
+            return;
+        }
+
+        var originalOffset = scrollEditor.Offset;
+        suppressEditorScrollSync = true;
+        textBox.Focus();
+        textBox.SelectAll();
+        scrollEditor.Offset = originalOffset;
+        suppressEditorScrollSync = false;
+
+        Dispatcher.UIThread.Post(() => {
+            if (scrollEditor == null) {
+                return;
+            }
+
+            suppressEditorScrollSync = true;
+            scrollEditor.Offset = originalOffset;
+            suppressEditorScrollSync = false;
+        }, DispatcherPriority.Loaded);
+    }
+
+    void CommitTimingChangeEdit(BPMChange bpmChange, TimingChangeEditKind editKind, string? text) {
+        if (mapEditor == null || string.IsNullOrWhiteSpace(text)) {
+            return;
+        }
+
+        if (editKind == TimingChangeEditKind.GridDivision) {
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var gridDivision) ||
+                !Helper.DoubleRangeCheck(gridDivision, 1, Editor.GridDivisionMax)) {
+                return;
+            }
+
+            mapEditor.RemoveBPMChange(bpmChange, redraw: false);
+            bpmChange.gridDivision = gridDivision;
+            mapEditor.AddBPMChange(bpmChange);
+            RefreshOpenToolWindows();
+            return;
+        }
+
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var bpm) || bpm <= 0) {
+            return;
+        }
+
+        mapEditor.RemoveBPMChange(bpmChange, redraw: false);
+        bpmChange.BPM = bpm;
+        mapEditor.AddBPMChange(bpmChange);
+        RefreshOpenToolWindows();
     }
 
     void UpdateEditorBeatDisplay() {
@@ -1695,12 +1959,23 @@ public sealed partial class MainWindow {
     void OnMainWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
         if (e.Property == BoundsProperty || e.Property == ClientSizeProperty) {
             ApplyEditorLayoutMetrics();
+            QueuePostLayoutEditorSurfaceRefresh();
+        }
+    }
+
+    void OnEditorLayoutContainerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
+        if (e.Property == BoundsProperty) {
+            if (spectrogramResizeDragging) {
+                return;
+            }
+
+            QueuePostLayoutEditorSurfaceRefresh();
         }
     }
 
     void OnEditorScrollViewerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
         if (e.Property == BoundsProperty) {
-            ApplyEditorLayoutMetrics();
+            ApplyEditorLayoutMetrics(refreshSurface: !spectrogramResizeDragging);
             return;
         }
 
@@ -1743,16 +2018,21 @@ public sealed partial class MainWindow {
         }
     }
 
-    void SyncSpectrogramScrollToEditor() {
+    void SyncSpectrogramScrollToEditor(bool invalidateWaveform = true) {
         if (scrollSpectrogram == null || scrollEditor == null) {
             return;
         }
 
-        suppressSpectrogramScrollSync = true;
-        scrollSpectrogram.Offset = new Vector(0, scrollEditor.Offset.Y);
-        suppressSpectrogramScrollSync = false;
-        mainWaveformCanvas?.InvalidateVisual();
-        mainWaveformImage?.InvalidateVisual();
+        if (Math.Abs(scrollSpectrogram.Offset.Y - scrollEditor.Offset.Y) >= 0.1) {
+            suppressSpectrogramScrollSync = true;
+            scrollSpectrogram.Offset = new Vector(0, scrollEditor.Offset.Y);
+            suppressSpectrogramScrollSync = false;
+        }
+
+        if (invalidateWaveform) {
+            mainWaveformCanvas?.InvalidateVisual();
+            mainWaveformImage?.InvalidateVisual();
+        }
     }
 
     void FocusEditorSurface() {
@@ -1775,25 +2055,7 @@ public sealed partial class MainWindow {
             var width = child.Width;
             var height = child.Height;
 
-            if (descriptor.BpmChange != null) {
-                foreach (var label in child.GetVisualChildren().OfType<Border>()) {
-                    var labelLeft = left + NormalizeCanvasCoordinate(Canvas.GetLeft(label));
-                    var labelTop = top + NormalizeCanvasCoordinate(Canvas.GetTop(label));
-                    var labelWidth = label.Bounds.Width > 1 ? label.Bounds.Width : label.Width;
-                    var labelHeight = label.Bounds.Height > 1 ? label.Bounds.Height : label.Height;
-                    if (position.X >= labelLeft &&
-                        position.X <= labelLeft + labelWidth &&
-                        position.Y >= labelTop &&
-                        position.Y <= labelTop + labelHeight) {
-                        return child;
-                    }
-                }
-
-                continue;
-            }
-
-            if (position.X >= left && position.X <= left + width &&
-                position.Y >= top && position.Y <= top + height) {
+            if (IsPointerOnMarkerLabel(child, position)) {
                 return child;
             }
         }
@@ -1801,8 +2063,62 @@ public sealed partial class MainWindow {
         return null;
     }
 
+    bool TryResolveTimingChangeEditKind(Control markerControl, Point position, out TimingChangeEditKind editKind) {
+        editKind = default;
+        if (markerControl.Tag is not EditorMarkerDescriptor { BpmChange: not null }) {
+            return false;
+        }
+
+        var left = NormalizeCanvasCoordinate(Canvas.GetLeft(markerControl));
+        var top = NormalizeCanvasCoordinate(Canvas.GetTop(markerControl));
+        foreach (var label in markerControl.GetVisualChildren().OfType<Border>()) {
+            var labelLeft = left + NormalizeCanvasCoordinate(Canvas.GetLeft(label));
+            var labelTop = top + NormalizeCanvasCoordinate(Canvas.GetTop(label));
+            var labelWidth = label.Bounds.Width > 1 ? label.Bounds.Width : label.Width;
+            var labelHeight = label.Bounds.Height > 1 ? label.Bounds.Height : label.Height;
+            if (position.X < labelLeft ||
+                position.X > labelLeft + labelWidth ||
+                position.Y < labelTop ||
+                position.Y > labelTop + labelHeight) {
+                continue;
+            }
+
+            var text = label.Child is TextBlock textBlock ? textBlock.Text ?? string.Empty : string.Empty;
+            editKind = text.StartsWith("1/", StringComparison.Ordinal)
+                ? TimingChangeEditKind.GridDivision
+                : TimingChangeEditKind.Bpm;
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool IsPointerOnMarkerLabel(Control markerControl, Point position) {
+        var left = NormalizeCanvasCoordinate(Canvas.GetLeft(markerControl));
+        var top = NormalizeCanvasCoordinate(Canvas.GetTop(markerControl));
+        foreach (var label in markerControl.GetVisualChildren().OfType<Border>()) {
+            var labelLeft = left + NormalizeCanvasCoordinate(Canvas.GetLeft(label));
+            var labelTop = top + NormalizeCanvasCoordinate(Canvas.GetTop(label));
+            var labelWidth = label.Bounds.Width > 1 ? label.Bounds.Width : label.Width;
+            var labelHeight = label.Bounds.Height > 1 ? label.Bounds.Height : label.Height;
+            if (position.X >= labelLeft &&
+                position.X <= labelLeft + labelWidth &&
+                position.Y >= labelTop &&
+                position.Y <= labelTop + labelHeight) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     static double NormalizeCanvasCoordinate(double value) {
         return double.IsNaN(value) || double.IsInfinity(value) ? 0 : value;
+    }
+
+    enum TimingChangeEditKind {
+        GridDivision,
+        Bpm
     }
 
     sealed class EditorMarkerDescriptor {

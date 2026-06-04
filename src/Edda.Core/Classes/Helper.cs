@@ -160,24 +160,32 @@ public partial class Helper {
         })).Start();
     }
     public static int FFmpeg(string dir, string arg) {
+        var path = ResolveFFmpegPath();
+
+        var startInfo = new ProcessStartInfo(path, arg);
+        startInfo.WorkingDirectory = dir;
+        var p = Process.Start(startInfo);
+        if (p == null) {
+            throw new InvalidOperationException($"Couldn't start ffmpeg executable '{path}'.");
+        }
+        p.WaitForExit();
+        int exitCode = p.ExitCode;
+        p.Close();
+
+        return exitCode;
+    }
+    private static string ResolveFFmpegPath() {
+        if (!OperatingSystem.IsWindows()) {
+            return "ffmpeg";
+        }
+
         // uses the bundled version of ffmpeg with ONLY libvorbis support
         var path = Path.Combine(AppContext.BaseDirectory, Program.ResourcesPath, "ffmpeg.exe");
         if (!File.Exists(path)) {
             // fallback for layouts where Resources are copied to the app root
             path = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
         }
-        if (!File.Exists(path)) {
-            throw new FileNotFoundException($"Couldn't find ffmpeg executable in {AppContext.BaseDirectory}");
-        }
-
-        var startInfo = new ProcessStartInfo(path, arg);
-        startInfo.WorkingDirectory = dir;
-        var p = Process.Start(startInfo);
-        p.WaitForExit();
-        int exitCode = p.ExitCode;
-        p.Close();
-
-        return exitCode;
+        return File.Exists(path) ? path : "ffmpeg";
     }
     public static void CmdCopyFile(string src, string dst) {
         var p = Process.Start("cmd.exe", "/C copy \"" + src + "\" \"" + dst + "\"");

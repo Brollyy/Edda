@@ -66,8 +66,19 @@ public sealed partial class MainWindow {
                 Stretch = global::Avalonia.Media.Stretch.Fill,
                 IsHitTestVisible = false
             };
-            RenderOptions.SetBitmapInterpolationMode(image, BitmapInterpolationMode.None);
+            RenderOptions.SetBitmapInterpolationMode(image, GetSpectrogramInterpolationMode());
             spectrogramChunkImages.Add(image);
+        }
+    }
+
+    BitmapInterpolationMode GetSpectrogramInterpolationMode() {
+        return songIsPlaying ? BitmapInterpolationMode.LowQuality : BitmapInterpolationMode.HighQuality;
+    }
+
+    void UpdateSpectrogramInterpolationMode() {
+        var mode = GetSpectrogramInterpolationMode();
+        foreach (var image in spectrogramChunkImages) {
+            RenderOptions.SetBitmapInterpolationMode(image, mode);
         }
     }
 

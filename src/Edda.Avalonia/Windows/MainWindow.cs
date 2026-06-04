@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window {
     bool textInputHasFocus;
     bool songIsPlaying;
     bool songPauseInProgress;
+    bool shiftKeyDown;
     bool snapToGrid = true;
     bool navWaveformDragging;
     bool spectrogramResizeDragging;
@@ -60,18 +61,23 @@ public sealed partial class MainWindow : Window {
     int drumFeedbackSequence;
     int noteFeedbackSequence;
     const double SpectrogramResizeGripWidth = 8;
+    const double SpectrogramDefaultWidth = 220;
     const double SidebarDockWidth = 225;
-    double spectrogramPreferredWidth = 100;
+    const double PlaybackUiTextUpdateIntervalMilliseconds = 100;
+    const double PlaybackProgressIndicatorEpsilon = 0.5;
+    double spectrogramPreferredWidth = SpectrogramDefaultWidth;
     double spectrogramResizeDragOriginX;
     double spectrogramResizeDragOriginWidth;
+    double lastPlaybackUiTextPositionMilliseconds = double.NaN;
+    double lastSongProgressIndicatorY = double.NaN;
+    double lastSongProgressAutomationPositionMilliseconds = double.NaN;
 
     OpenAlAudioEngine? audioEngine;
     AvaloniaOpenAlSongPreviewController? songPreviewController;
     CancellationTokenSource songPlaybackCancellationTokenSource = new();
     readonly Stopwatch playbackClock = new();
     double playbackStartMilliseconds;
-    OpenAlBuffer? songPlayerBuffer;
-    OpenAlSource? songPlayerSource;
+    OpenAlStreamingSource? songPlayerSource;
     IAudioCuePlayer? drummer;
     IAudioCuePlayer? metronome;
     NoteScanner? noteScanner;
@@ -267,6 +273,14 @@ public sealed partial class MainWindow : Window {
         if (TryRouteOverlayPointerToNavWaveform(e.Source, windowPosition, onPressed: null, onMoved: () => OnNavWaveformPointerMoved(ImgWaveformVertical, e))) {
             e.Handled = true;
             return;
+        }
+
+        if (!navWaveformDragging &&
+            lineSongMouseover != null &&
+            lineSongMouseover.Opacity > 0 &&
+            ImgWaveformVertical != null &&
+            !IsWindowPointWithinControl(ImgWaveformVertical, windowPosition)) {
+            RefreshSongMouseoverIndicator(0, isVisible: false);
         }
 
         if (TryRouteOverlayPointerToSpectrogramResize(e.Source, windowPosition, onPressed: null, onMoved: () => OnSpectrogramResizePointerMoved(spectrogramResize, e))) {
@@ -527,6 +541,7 @@ public sealed partial class MainWindow : Window {
             songPlaybackCancellationTokenSource.Cancel();
             songPositionTimer.Stop();
             playbackClock.Stop();
+            ResetPlaybackCanvasScroll();
             songIsPlaying = false;
             StopSongPlayer();
             noteScanner?.Stop();
@@ -630,6 +645,12 @@ public sealed partial class MainWindow : Window {
         fileMenu.Items.Add(BuildMenuItem("Close Map", "MenuItemCloseMap", (_, _) => BeginCloseMap()));
 
         var editMenu = BuildMenuItem("Edit");
+        editMenu.Items.Add(BuildMenuItem("Copy", "MenuItemCopy", (_, _) => CopySelection()));
+        editMenu.Items.Add(BuildMenuItem("Cut", "MenuItemCut", (_, _) => CutSelection()));
+        editMenu.Items.Add(BuildMenuItem("Paste", "MenuItemPaste", (_, _) => PasteClipboardAtEditor(pasteOnColumn: false)));
+        editMenu.Items.Add(BuildMenuItem("Paste On Column", "MenuItemPasteOnColumn", (_, _) => PasteClipboardAtEditor(pasteOnColumn: true)));
+        editMenu.Items.Add(BuildMenuItem("Mirror", "MenuItemMirror", (_, _) => MirrorSelection()));
+        editMenu.Items.Add(BuildMenuItem("Quantize", "MenuItemQuantize", (_, _) => QuantizeSelection()));
         menuItemSnapToGrid = BuildMenuItem("Snap Notes to Grid", "MenuItemSnapToGrid", (_, _) => SetSnapToGrid(menuItemSnapToGrid.IsChecked));
         menuItemSnapToGrid.ToggleType = MenuItemToggleType.CheckBox;
         editMenu.Items.Add(menuItemSnapToGrid);
@@ -879,6 +900,7 @@ public sealed partial class MainWindow : Window {
             VerticalAlignment = VerticalAlignment.Stretch,
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto")
         }, "EditorPanel");
+        editorPanel.PropertyChanged += OnEditorLayoutContainerPropertyChanged;
 
         var backgroundTexture = GetResourceBitmap("waterTexture.png");
         if (backgroundTexture != null) {
@@ -895,7 +917,7 @@ public sealed partial class MainWindow : Window {
         gridSpectrogram = AutomationHelper.WithAutomationId(new Grid {
             Name = "gridSpectrogram",
             HorizontalAlignment = HorizontalAlignment.Left,
-            ColumnDefinitions = new ColumnDefinitions($"100,{SpectrogramResizeGripWidth.ToString(CultureInfo.InvariantCulture)}"),
+            ColumnDefinitions = new ColumnDefinitions($"{spectrogramPreferredWidth.ToString(CultureInfo.InvariantCulture)},{SpectrogramResizeGripWidth.ToString(CultureInfo.InvariantCulture)}"),
             ClipToBounds = true
         }, "gridSpectrogram");
         gridSpectrogram.Width = spectrogramPreferredWidth + SpectrogramResizeGripWidth;
@@ -913,6 +935,8 @@ public sealed partial class MainWindow : Window {
             Width = 100,
             ClipToBounds = true
         }, "panelSpectrogram");
+        spectrogramPlaybackScrollTransform = new TranslateTransform();
+        spectrogramCanvas.RenderTransform = spectrogramPlaybackScrollTransform;
         scrollSpectrogram = AutomationHelper.WithAutomationId(new ScrollViewer {
             Name = "scrollSpectrogram",
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -949,6 +973,7 @@ public sealed partial class MainWindow : Window {
             MaxWidth = EditorSurfaceMaxWidth,
             HorizontalAlignment = HorizontalAlignment.Center
         };
+        editorViewport.PropertyChanged += OnEditorLayoutContainerPropertyChanged;
         Grid.SetColumn(editorViewport, 1);
 
         editorMarginGrid = new Grid {
@@ -1850,6 +1875,7 @@ public sealed partial class MainWindow : Window {
             scrollEditor.IsHitTestVisible = !songIsPlaying;
             scrollEditor.Focusable = !songIsPlaying;
         }
+        UpdateSpectrogramInterpolationMode();
         if (songIsPlaying) {
             HideEditorHoverVisuals();
         }
@@ -1908,17 +1934,37 @@ public sealed partial class MainWindow : Window {
         suppressControlEvents = false;
 
         var seconds = clamped / 1000.0;
-        TxtSongPosition.Text = Helper.TimeFormat(seconds);
         var bpm = Math.Max(1, GetMapDouble("_beatsPerMinute"));
         var beat = seconds * bpm / 60.0;
-        LblSelectedBeat.Text = $"Time: {Helper.TimeFormat(seconds)} | Global Beat: {beat:0.##}";
+        if (ShouldUpdatePlaybackText(clamped)) {
+            TxtSongPosition.Text = Helper.TimeFormat(seconds);
+            LblSelectedBeat.Text = $"Time: {Helper.TimeFormat(seconds)} | Global Beat: {beat:0.##}";
+            lastPlaybackUiTextPositionMilliseconds = clamped;
+        }
         RefreshSongProgressIndicator();
         if (updateEditorScroll) {
             SyncEditorScrollToCurrentBeat();
         }
     }
 
+    bool ShouldUpdatePlaybackText(double milliseconds) {
+        if (!songIsPlaying ||
+            double.IsNaN(lastPlaybackUiTextPositionMilliseconds) ||
+            Math.Abs(milliseconds - lastPlaybackUiTextPositionMilliseconds) >= PlaybackUiTextUpdateIntervalMilliseconds) {
+            return true;
+        }
+
+        return milliseconds >= SliderSongProgress.Maximum - 10;
+    }
+
     void OnNavWaveformPointerPressed(object? sender, PointerPressedEventArgs e) {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+            e.GetCurrentPoint(ImgWaveformVertical).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed &&
+            TrySelectNotesForNavMarker(e.GetPosition(ImgWaveformVertical))) {
+            e.Handled = true;
+            return;
+        }
+
         navWaveformDragging = true;
         e.Pointer.Capture(ImgWaveformVertical);
         RefreshSongMouseoverIndicator(e.GetPosition(ImgWaveformVertical).Y, isVisible: true);
@@ -1951,6 +1997,7 @@ public sealed partial class MainWindow : Window {
     }
 
     void OnNavWaveformPointerExited(object? sender, PointerEventArgs e) {
+        navWaveformDragging = false;
         RefreshSongMouseoverIndicator(0, isVisible: false);
     }
 
@@ -1960,6 +2007,64 @@ public sealed partial class MainWindow : Window {
             ? 0
             : 1 - Math.Clamp(position.Y / ImgWaveformVertical.Bounds.Height, 0, 1);
         SetSongPosition(ratio * SliderSongProgress.Maximum, updateSlider: true, updateNavWaveform: false);
+    }
+
+    bool TrySelectNotesForNavMarker(Point position) {
+        if (mapEditor?.currentMapDifficulty == null || ImgWaveformVertical == null) {
+            return false;
+        }
+
+        var height = GetNavWaveformHeight();
+        if (height <= 0) {
+            return false;
+        }
+
+        const double bookmarkHitPadding = 8;
+        const double timingChangeTopPadding = 19;
+        const double timingChangeBottomPadding = 8;
+        double? nearestDistance = null;
+        Bookmark? nearestBookmark = null;
+        BPMChange? nearestBpmChange = null;
+
+        foreach (var bookmark in mapEditor.currentMapDifficulty.bookmarks) {
+            var y = BeatToNavY(bookmark.beat, height);
+            var distance = Math.Abs(position.Y - y);
+            if (distance <= bookmarkHitPadding && IsNearest(distance)) {
+                nearestDistance = distance;
+                nearestBookmark = bookmark;
+                nearestBpmChange = null;
+            }
+        }
+
+        foreach (var bpmChange in mapEditor.currentMapDifficulty.bpmChanges) {
+            var y = BeatToNavY(bpmChange.globalBeat, height);
+            if (position.Y < y - timingChangeTopPadding || position.Y > y + timingChangeBottomPadding) {
+                continue;
+            }
+
+            var distance = Math.Abs(position.Y - y);
+            if (IsNearest(distance)) {
+                nearestDistance = distance;
+                nearestBookmark = null;
+                nearestBpmChange = bpmChange;
+            }
+        }
+
+        if (nearestBookmark != null) {
+            mapEditor.SelectNotesInBookmark(nearestBookmark);
+            return true;
+        }
+
+        if (nearestBpmChange != null) {
+            mapEditor.SelectNotesInBPMChange(nearestBpmChange);
+            return true;
+        }
+
+        return false;
+
+        bool IsNearest(double distance) {
+            return !nearestDistance.HasValue || distance < nearestDistance.Value;
+        }
     }
 
     void BeginAddDifficulty() {
@@ -2556,8 +2661,6 @@ public sealed partial class MainWindow : Window {
         songPlaybackCancellationTokenSource.Dispose();
         songPlayerSource?.Dispose();
         songPlayerSource = null;
-        songPlayerBuffer?.Dispose();
-        songPlayerBuffer = null;
         audioEngine?.Dispose();
         audioEngine = null;
         coverPreviewBitmap?.Dispose();
@@ -2580,11 +2683,8 @@ public sealed partial class MainWindow : Window {
         SliderSongProgress.Maximum = currentSongDurationSeconds * 1000;
         if (!string.IsNullOrWhiteSpace(songPath) && File.Exists(songPath) && audioEngine != null) {
             try {
-                songPlayerBuffer = audioEngine.LoadVorbisBuffer(songPath);
-                songPlayerSource = audioEngine.CreateSource();
+                songPlayerSource = audioEngine.CreateStreamingSource();
             } catch {
-                songPlayerBuffer?.Dispose();
-                songPlayerBuffer = null;
                 songPlayerSource?.Dispose();
                 songPlayerSource = null;
             }
@@ -2596,8 +2696,6 @@ public sealed partial class MainWindow : Window {
         StopSongPlayer();
         songPlayerSource?.Dispose();
         songPlayerSource = null;
-        songPlayerBuffer?.Dispose();
-        songPlayerBuffer = null;
         InvalidateEditorAudioVisuals(clearVisuals: true);
     }
 
@@ -2613,6 +2711,8 @@ public sealed partial class MainWindow : Window {
         playbackClock.Restart();
 
         songIsPlaying = true;
+        lastPlaybackUiTextPositionMilliseconds = double.NaN;
+        ResetPlaybackCanvasScroll();
         UpdatePlaybackUi();
         songPreviewController?.StopPreview();
         songPreviewController?.DisablePreviewButton();
@@ -2638,18 +2738,18 @@ public sealed partial class MainWindow : Window {
     }
 
     bool StartSongPlayer(double startMilliseconds) {
-        if (songPlayerBuffer == null || songPlayerSource == null) {
+        var songPath = CurrentSongPath;
+        if (string.IsNullOrWhiteSpace(songPath) || !File.Exists(songPath) || songPlayerSource == null) {
             return false;
         }
 
         StopSongPlayer();
         var latencyAdjustedStart = Math.Max(0, startMilliseconds - editorAudioLatency);
-        songPlayerSource.Play(
-            songPlayerBuffer,
-            startSeconds: latencyAdjustedStart / 1000.0,
+        return songPlayerSource.PlayVorbis(
+            songPath,
+            tempo: SliderSongTempo.Value,
             volume: SliderSongVol.Value,
-            pitch: SliderSongTempo.Value);
-        return true;
+            startSeconds: latencyAdjustedStart / 1000.0);
     }
 
     void StopSongPlayer() {
@@ -2670,6 +2770,7 @@ public sealed partial class MainWindow : Window {
     }
 
     void UpdateAudioVolumes() {
+        songPlayerSource?.SetVolume(SliderSongVol.Value);
         songPreviewController?.UpdateVolume();
         drummer?.ChangeVolume(SliderDrumVol.Value);
         metronome?.ChangeVolume(SliderDrumVol.Value);
@@ -2762,8 +2863,17 @@ public sealed partial class MainWindow : Window {
     }
 
     void OnKeyDown(object? sender, KeyEventArgs e) {
+        shiftKeyDown = e.KeyModifiers.HasFlag(KeyModifiers.Shift) || e.Key is Key.LeftShift or Key.RightShift;
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Shift)) {
             switch (e.Key) {
+                case Key.B:
+                    if (!songIsPlaying) {
+                        AddBookmarkAtEditorPointerOrCurrentPosition(snappedToGrid: true);
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
                 case Key.T:
                     if (!songIsPlaying) {
                         AddTimingChangeAtEditorPointerOrCurrentPosition(snappedToGrid: true);
@@ -2780,6 +2890,11 @@ public sealed partial class MainWindow : Window {
                     }
                     break;
             }
+        }
+
+        if (TryHandleEditorArrowShortcut(e)) {
+            e.Handled = true;
+            return;
         }
 
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control)) {
@@ -2819,9 +2934,46 @@ public sealed partial class MainWindow : Window {
                         return;
                     }
                     break;
+                case Key.C:
+                    if (CopySelection()) {
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.X:
+                    if (CutSelection()) {
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.V:
+                    if (PasteClipboardAtEditor(e.KeyModifiers.HasFlag(KeyModifiers.Shift))) {
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.M:
+                    if (MirrorSelection()) {
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.Q:
+                    if (QuantizeSelection()) {
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
                 case Key.B:
                     if (!songIsPlaying) {
-                        AddBookmarkAtEditorPointerOrCurrentPosition();
+                        AddBookmarkAtEditorPointerOrCurrentPosition(snappedToGrid: false);
+                        e.Handled = true;
+                        return;
+                    }
+                    break;
+                case Key.T:
+                    if (!songIsPlaying) {
+                        AddTimingChangeAtEditorPointerOrCurrentPosition(snappedToGrid: false);
                         e.Handled = true;
                         return;
                     }
@@ -2884,7 +3036,102 @@ public sealed partial class MainWindow : Window {
         }
     }
 
+    bool TryHandleEditorArrowShortcut(KeyEventArgs e) {
+        if (textInputHasFocus || mapEditor?.currentMapDifficulty == null) {
+            return false;
+        }
+
+        var hasShift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var hasControl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        if (!hasShift && !hasControl) {
+            return false;
+        }
+
+        switch (e.Key) {
+            case Key.Up:
+                mapEditor.ShiftSelectionByBeat(hasControl ? MoveNote.MOVE_GRID_UP : MoveNote.MOVE_BEAT_UP);
+                break;
+            case Key.Down:
+                mapEditor.ShiftSelectionByBeat(hasControl ? MoveNote.MOVE_GRID_DOWN : MoveNote.MOVE_BEAT_DOWN);
+                break;
+            case Key.Left:
+                mapEditor.ShiftSelectionByCol(-1);
+                break;
+            case Key.Right:
+                mapEditor.ShiftSelectionByCol(1);
+                break;
+            default:
+                return false;
+        }
+
+        UpdateDifficultyPrediction();
+        return true;
+    }
+
+    bool CanEditSelectedNotes() {
+        return !songIsPlaying && !textInputHasFocus && mapEditor?.currentMapDifficulty != null;
+    }
+
+    bool CopySelection() {
+        if (!CanEditSelectedNotes()) {
+            return false;
+        }
+
+        mapEditor?.CopySelection();
+        return true;
+    }
+
+    bool CutSelection() {
+        if (!CanEditSelectedNotes()) {
+            return false;
+        }
+
+        mapEditor?.CutSelection();
+        UpdateDifficultyPrediction();
+        return true;
+    }
+
+    bool PasteClipboardAtEditor(bool pasteOnColumn) {
+        if (!CanEditSelectedNotes()) {
+            return false;
+        }
+
+        var beatOffset = editorPointerInside
+            ? GetActiveEditorBeat()
+            : GetCurrentSongBeat();
+        var column = pasteOnColumn && editorHoveredColumn is >= 0 and <= 3
+            ? editorHoveredColumn
+            : (int?)null;
+        mapEditor?.PasteClipboard(beatOffset, column);
+        UpdateDifficultyPrediction();
+        return true;
+    }
+
+    bool MirrorSelection() {
+        if (!CanEditSelectedNotes()) {
+            return false;
+        }
+
+        mapEditor?.MirrorSelection();
+        UpdateDifficultyPrediction();
+        return true;
+    }
+
+    bool QuantizeSelection() {
+        if (!CanEditSelectedNotes()) {
+            return false;
+        }
+
+        mapEditor?.QuantizeSelection();
+        UpdateDifficultyPrediction();
+        return true;
+    }
+
     void OnKeyUp(object? sender, KeyEventArgs e) {
+        if (e.Key is Key.LeftShift or Key.RightShift) {
+            shiftKeyDown = false;
+        }
+
         if (e.Key == Key.Space && !textInputHasFocus) {
             e.Handled = true;
         }
@@ -2917,7 +3164,7 @@ public sealed partial class MainWindow : Window {
         }
 
         var position = e.GetPosition(editorPanel);
-        SetSpectrogramWidth(spectrogramResizeDragOriginWidth + (position.X - spectrogramResizeDragOriginX));
+        SetSpectrogramWidth(spectrogramResizeDragOriginWidth + (position.X - spectrogramResizeDragOriginX), refreshSurface: false);
         e.Handled = true;
     }
 
@@ -2928,6 +3175,7 @@ public sealed partial class MainWindow : Window {
 
         spectrogramResizeDragging = false;
         e.Pointer.Capture(null);
+        SetSpectrogramWidth(GetSpectrogramWidth());
         e.Handled = true;
     }
 
@@ -3182,9 +3430,21 @@ public sealed partial class MainWindow : Window {
         var height = GetNavWaveformHeight();
         var ratio = SliderSongProgress.Maximum <= 0 ? 0 : Math.Clamp(currentSongPositionMilliseconds / SliderSongProgress.Maximum, 0, 1);
         var y = height * (1 - ratio);
+        if (songIsPlaying &&
+            !double.IsNaN(lastSongProgressIndicatorY) &&
+            Math.Abs(y - lastSongProgressIndicatorY) < PlaybackProgressIndicatorEpsilon) {
+            return;
+        }
+
         lineSongProgress.StartPoint = new Point(0, y);
         lineSongProgress.EndPoint = new Point(width, y);
-        AutomationHelper.SetItemStatus(lineSongProgress, $"y:{y:0.##}|height:{height:0.##}|ratio:{ratio:0.####}");
+        lastSongProgressIndicatorY = y;
+        if (!songIsPlaying ||
+            double.IsNaN(lastSongProgressAutomationPositionMilliseconds) ||
+            Math.Abs(currentSongPositionMilliseconds - lastSongProgressAutomationPositionMilliseconds) >= PlaybackUiTextUpdateIntervalMilliseconds) {
+            AutomationHelper.SetItemStatus(lineSongProgress, $"y:{y:0.##}|height:{height:0.##}|ratio:{ratio:0.####}");
+            lastSongProgressAutomationPositionMilliseconds = currentSongPositionMilliseconds;
+        }
     }
 
     void RefreshSongMouseoverIndicator(double pointerY, bool isVisible) {
@@ -3198,6 +3458,25 @@ public sealed partial class MainWindow : Window {
         lineSongMouseover.StartPoint = new Point(0, y);
         lineSongMouseover.EndPoint = new Point(width, y);
         lineSongMouseover.Opacity = isVisible ? 1 : 0;
+    }
+
+    bool TryGetNavMouseoverBeat(out double beat) {
+        beat = 0;
+        if (lineSongMouseover == null ||
+            lineSongMouseover.Opacity <= 0 ||
+            ImgWaveformVertical == null ||
+            SliderSongProgress.Maximum <= 0) {
+            return false;
+        }
+
+        var height = GetNavWaveformHeight();
+        if (height <= 0) {
+            return false;
+        }
+
+        var ratio = 1 - Math.Clamp(lineSongMouseover.StartPoint.Y / height, 0, 1);
+        beat = ratio * SliderSongProgress.Maximum / 60000.0 * Math.Max(1, CurrentGlobalBpm);
+        return true;
     }
 
     double GetNavWaveformWidth() {
@@ -3447,8 +3726,12 @@ public sealed partial class MainWindow : Window {
         mapEditor.AddBookmark(new Bookmark(GetCurrentSongBeat(), Editor.NavBookmark.DefaultName));
     }
 
-    void AddBookmarkAtEditorPointerOrCurrentPosition() {
-        var beat = editorPointerInside ? GetActiveEditorBeat() : GetCurrentSongBeat();
+    void AddBookmarkAtEditorPointerOrCurrentPosition(bool snappedToGrid) {
+        var beat = editorPointerInside
+            ? GetActiveEditorBeat(snappedToGrid)
+            : TryGetNavMouseoverBeat(out var navBeat)
+                ? navBeat
+                : GetCurrentSongBeat();
         AddBookmarkAtBeat(beat);
     }
 
@@ -3472,7 +3755,9 @@ public sealed partial class MainWindow : Window {
     void AddTimingChangeAtEditorPointerOrCurrentPosition(bool snappedToGrid) {
         var beat = editorPointerInside
             ? GetActiveEditorBeat(snappedToGrid)
-            : GetCurrentSongBeat();
+            : TryGetNavMouseoverBeat(out var navBeat)
+                ? navBeat
+                : GetCurrentSongBeat();
         AddTimingChangeAtBeat(beat);
     }
 
@@ -3606,7 +3891,7 @@ public sealed partial class MainWindow : Window {
         }
 
         public string GetUserSetting(string key) => userSettings.GetValueForKey(key) ?? string.Empty;
-        public bool IsShiftKeyDown => false;
+        public bool IsShiftKeyDown => owner.shiftKeyDown;
         public void UpdateDifficultyButtons() => owner.RefreshDifficultyButtons();
         public void DrawEditorGrid(bool redrawWaveform = true) => owner.RefreshEditorSurface();
         public void RefreshBPMChanges() => owner.RefreshOpenToolWindows();

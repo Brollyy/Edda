@@ -6,6 +6,7 @@ namespace Edda.Avalonia.Services;
 
 internal sealed class AvaloniaOpenAlAudioCuePlayer : IAudioCuePlayer {
     const int NumChannels = 4;
+    const double CueGain = 2.0;
     readonly OpenAlAudioEngine audioEngine;
     readonly int streams;
     readonly int uniqueSamples;
@@ -60,12 +61,15 @@ internal sealed class AvaloniaOpenAlAudioCuePlayer : IAudioCuePlayer {
 
         lastPlayedStream++;
         var sampleIndex = lastPlayedStream % NumChannels % uniqueSamples;
-        source.Play(sampleBuffers[sampleIndex], volume: volume, pan: ResolvePan(channel));
+        source.Play(sampleBuffers[sampleIndex], volume: GetEffectiveVolume(), pan: ResolvePan(channel));
         return true;
     }
 
     public void ChangeVolume(double vol) {
         volume = Math.Clamp(Math.Abs(vol), 0, 1);
+        foreach (var source in sources) {
+            source.SetVolume(GetEffectiveVolume());
+        }
     }
 
     public void Dispose() {
@@ -95,6 +99,10 @@ internal sealed class AvaloniaOpenAlAudioCuePlayer : IAudioCuePlayer {
         return basePath == "bassdrum"
             ? -1
             : (float)(channel * 2.0 * Audio.MaxPanDistance / (NumChannels - 1) - Audio.MaxPanDistance);
+    }
+
+    double GetEffectiveVolume() {
+        return volume * CueGain;
     }
 
     static string GetFilePath(string basePath, int sampleNumber) {

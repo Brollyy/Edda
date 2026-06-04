@@ -67,9 +67,10 @@ public sealed class MapWorkspaceService {
             throw new ArgumentException("A map folder is required.", nameof(mapFolder));
         }
 
-        var beatmap = new RagnarockMap(mapFolder, makeNew: false);
+        var resolvedMapFolder = RagnarockMap.ResolveExistingPathCasing(mapFolder);
+        var beatmap = new RagnarockMap(resolvedMapFolder, makeNew: false);
         return new MapDocumentSummary(
-            Path.GetFullPath(mapFolder),
+            resolvedMapFolder,
             (string?)beatmap.GetValue("_songName") ?? string.Empty,
             (string?)beatmap.GetValue("_songFilename") ?? BeatmapDefaults.SongFilename
         );

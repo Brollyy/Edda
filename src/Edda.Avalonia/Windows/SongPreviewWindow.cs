@@ -190,6 +190,9 @@ internal sealed class SongPreviewWindow : Window {
                 mapFolder,
                 $"-i \"{songPath}\" -y -ss 00:{startMin:D2}:{startSec:D2} -to 00:{endMin:D2}:{endSec:D2} -vn -af afade=t=out:st={TotalSec(endMin, endSec) - fadeOutDur}:d={fadeOutDur},afade=t=in:st={TotalSec(startMin, startSec)}:d={fadeInDur} \"{savePath}\""
             );
+        } catch (Exception ex) {
+            mainWindow.Session.ShowError(this, "Error", $"There was an issue creating song preview:\n{ex.Message}", onDismissed: null);
+            return;
         } finally {
             btnGenerate.IsEnabled = true;
         }

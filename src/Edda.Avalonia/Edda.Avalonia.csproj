@@ -17,6 +17,7 @@
     <PackageReference Include="NAudio.Vorbis" Version="1.5.0" />
     <PackageReference Include="OpenTK.Audio.OpenAL" Version="4.9.4" />
     <PackageReference Include="Spectrogram" Version="1.6.1" />
+    <PackageReference Include="SoundTouch.Net.NAudioSupport.Core" Version="2.3.2" />
     <ProjectReference Include="..\Edda.Core\Edda.Core.csproj" />
     <ProjectReference Include="..\Edda.App\Edda.App.csproj" />
   </ItemGroup>

@@ -47,6 +47,13 @@ internal sealed class OpenAlAudioEngine : IDisposable {
         }
     }
 
+    public OpenAlStreamingSource CreateStreamingSource() {
+        lock (SyncRoot) {
+            EnsureCurrentContext();
+            return new OpenAlStreamingSource(AL.GenSource());
+        }
+    }
+
     public void Dispose() {
         lock (SyncRoot) {
             ALC.MakeContextCurrent(ALContext.Null);
@@ -131,8 +138,9 @@ internal sealed class OpenAlSource : IDisposable {
             OpenAlAudioEngine.EnsureCurrentContext();
             StopCore();
             AL.Source(Id, ALSourcei.Buffer, buffer.Id);
-            AL.Source(Id, ALSourcef.Gain, (float)Math.Clamp(volume, 0, 1));
+            SetVolumeCore(volume);
             AL.Source(Id, ALSourcef.Pitch, (float)Math.Clamp(pitch, 0.1, 2.0));
+            AL.Source(Id, ALSourcef.RolloffFactor, 0);
             AL.Source(Id, ALSource3f.Position, Math.Clamp(pan, -1, 1), 0, -1);
             if (startSeconds > 0) {
                 AL.Source(Id, ALSourcef.SecOffset, (float)startSeconds);
@@ -146,6 +154,17 @@ internal sealed class OpenAlSource : IDisposable {
             OpenAlAudioEngine.EnsureCurrentContext();
             StopCore();
         }
+    }
+
+    public void SetVolume(double volume) {
+        lock (OpenAlAudioEngine.SyncRoot) {
+            OpenAlAudioEngine.EnsureCurrentContext();
+            SetVolumeCore(volume);
+        }
+    }
+
+    void SetVolumeCore(double volume) {
+        AL.Source(Id, ALSourcef.Gain, (float)Math.Clamp(volume, 0, 4));
     }
 
     void StopCore() {

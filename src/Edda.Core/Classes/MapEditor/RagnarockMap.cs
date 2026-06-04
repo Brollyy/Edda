@@ -33,7 +33,9 @@ public class RagnarockMap {
     private string infoStr;
     private string[] difficultyMaps = new string[3];
     public RagnarockMap(string folderPath, bool makeNew) {
-        this.folderPath = folderPath;
+        this.folderPath = makeNew
+            ? Path.GetFullPath(folderPath)
+            : ResolveExistingPathCasing(folderPath);
         // TODO: automatically calculate makeNew?
         if (makeNew) {
             InitInfo();
@@ -567,7 +569,47 @@ public class RagnarockMap {
 
     // helper functions
     public string PathOf(string f) {
-        return Path.Combine(folderPath, f);
+        if (string.IsNullOrEmpty(f)) {
+            return folderPath;
+        }
+
+        return ResolveExistingPathCasing(Path.Combine(folderPath, f));
+    }
+
+    public static string ResolveExistingPathCasing(string path) {
+        var fullPath = Path.GetFullPath(path);
+        if (File.Exists(fullPath) || Directory.Exists(fullPath)) {
+            return fullPath;
+        }
+
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root)) {
+            return fullPath;
+        }
+
+        var relativePath = Path.GetRelativePath(root, fullPath);
+        if (relativePath == ".") {
+            return root;
+        }
+
+        var parts = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var current = root;
+        for (var i = 0; i < parts.Length; i++) {
+            var part = parts[i];
+            if (string.IsNullOrEmpty(part)) {
+                continue;
+            }
+
+            if (!Directory.Exists(current)) {
+                return Path.Combine(new[] { current }.Concat(parts.Skip(i)).ToArray());
+            }
+
+            var match = Directory.EnumerateFileSystemEntries(current)
+                .FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), part, StringComparison.OrdinalIgnoreCase));
+            current = match ?? Path.Combine(current, part);
+        }
+
+        return current;
     }
     public int GetMedalDistanceForMap(int indx, int medal) {
         JArray info = (JArray)GetCustomValueForDifficultyMap(indx, "_information");

@@ -112,4 +112,14 @@ namespace Edda.Windows {
                 mainWindow.UpdateDifficultyPrediction();
             }
         }
+
+        private void TimelineAlgoRadioButton_Checked(object sender, RoutedEventArgs e) {
+            CheckShowPreciseValues.IsEnabled = DifficultyPredictorTimeline.SINGLETON.GetSupportedFeatures().HasFlag(IDifficultyPredictor.Features.RealTime);
+            if (windowLoaded) {
+                userSettings.SetValueForKey(UserSettingsKey.DifficultyPredictorAlgorithm, DifficultyPrediction.SupportedAlgorithms.Timeline);
+                UpdateSettings();
+                mainWindow.UpdateDifficultyPrediction();
+            }
+        }
     }
+}

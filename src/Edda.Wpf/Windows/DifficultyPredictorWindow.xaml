@@ -58,12 +58,12 @@
                     </RadioButton>
                     <RadioButton x:Name="TimelineAlgoRadioButton" GroupName="diffAlgo" Checked="TimelineAlgoRadioButton_Checked">
                         <WrapPanel>
-                            <TextBlock Text="Timeline strain model "/>
+                            <TextBlock Text="Brollyy's timeline model "/>
                             <Image Source="/Resources/info_icon.png" Margin="0,2,0,0" Width="12" Height="12"
                                    ToolTipService.IsEnabled="True" ToolTipService.InitialShowDelay="0" ToolTipService.ShowOnDisabled="True">
                                 <Image.ToolTip>
                                     <ToolTip MaxWidth="400">
-                                        <TextBlock Text="Rule-based deterministic predictor based on local strain timeline aggregation over 4s windows with 0.5s stride." TextWrapping="WrapWithOverflow"/>
+                                        <TextBlock Text="Timeline model developed by Brollyy. It was trained by comparing map patterns with player performance and mapper ratings, then fitting a score that follows how difficulty builds across the whole song. Best used with completed maps." TextWrapping="WrapWithOverflow"/>
                                     </ToolTip>
                                 </Image.ToolTip>
                             </Image>

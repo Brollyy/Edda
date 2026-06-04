@@ -21,6 +21,7 @@ internal sealed class DifficultyPredictorWindow : Window {
     RadioButton pkBeamRadio = null!;
     RadioButton nytildeRadio = null!;
     RadioButton melchiorRadio = null!;
+    RadioButton timelineRadio = null!;
     CheckBox showPreciseCheckbox = null!;
     CheckBox showInMapStatsCheckbox = null!;
     Button difficultyButton0 = null!;
@@ -35,8 +36,8 @@ internal sealed class DifficultyPredictorWindow : Window {
         this.mainWindow = mainWindow;
         userSettings = mainWindow.UserSettings;
         Title = "Difficulty Predictor";
-        Width = 270;
-        Height = 360;
+        Width = 360;
+        Height = 450;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.Parse("#D4D0C8"));
@@ -166,9 +167,15 @@ internal sealed class DifficultyPredictorWindow : Window {
             "Melchior's scoring",
             DifficultyPrediction.SupportedAlgorithms.Melchior,
             "A simple scoring algorithm suggested by Melchior. It takes into account horizontal and vertical distances that each hand needs to move to hit the runes to estimate the map difficulty. More accurate for harder maps and best used with fully completed maps.");
+        timelineRadio = CreateAlgorithmRadioButton(
+            "TimelineAlgoRadioButton",
+            "Brollyy's timeline model",
+            DifficultyPrediction.SupportedAlgorithms.Timeline,
+            "Timeline model developed by Brollyy. It was trained by comparing map patterns with player performance and mapper ratings, then fitting a score that follows how difficulty builds across the whole song. Best used with completed maps.");
         panel.Children.Add(pkBeamRadio);
         panel.Children.Add(nytildeRadio);
         panel.Children.Add(melchiorRadio);
+        panel.Children.Add(timelineRadio);
         return panel;
     }
 
@@ -303,6 +310,9 @@ internal sealed class DifficultyPredictorWindow : Window {
                 break;
             case DifficultyPrediction.SupportedAlgorithms.Melchior:
                 melchiorRadio.IsChecked = true;
+                break;
+            case DifficultyPrediction.SupportedAlgorithms.Timeline:
+                timelineRadio.IsChecked = true;
                 break;
             default:
                 pkBeamRadio.IsChecked = true;

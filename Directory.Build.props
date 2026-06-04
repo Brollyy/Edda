@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)tests\serial-test-execution.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+</Project>

@@ -1,8 +1,8 @@
 using Edda.Classes.MapEditorNS.NoteNS;
+using Edda.Classes.MapEditorNS.Stats.Timeline;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Edda.Classes.MapEditorNS.Stats.Timeline;
 using static Edda.Classes.MapEditorNS.Stats.IDifficultyPredictor.Features;
 
 namespace Edda.Classes.MapEditorNS.Stats {

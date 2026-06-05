@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Edda</RootNamespace>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Edda.Core\Edda.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Classes\Audio\Adapters\NAudioAudioFileServices.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.1" />
+    <PackageReference Include="RagnaRuneString" Version="1.0.2" />
+    <PackageReference Include="Spectrogram" Version="1.6.1" />
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+    <PackageReference Include="Syncfusion.PMML.Net.Core" Version="20.4.0.43" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\Edda.Core\Resources\Edda-MLDP_Nytilde.onnx" Link="Resources\Edda-MLDP_Nytilde.onnx">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\Edda.Core\Resources\Edda-MLDP_Nytilde_Fallback.onnx" Link="Resources\Edda-MLDP_Nytilde_Fallback.onnx">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\Edda.Core\Resources\Edda-MLDP_PKBeam.pmml" Link="Resources\Edda-MLDP_PKBeam.pmml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

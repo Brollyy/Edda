@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>..\Edda.Core\Resources\AppIcon.ico</ApplicationIcon>
+    <RootNamespace>Edda.Avalonia</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
+    <PackageReference Include="NAudio" Version="2.1.0" />
+    <PackageReference Include="NAudio.Vorbis" Version="1.5.0" />
+    <PackageReference Include="OpenTK.Audio.OpenAL" Version="4.9.4" />
+    <PackageReference Include="Spectrogram" Version="1.6.1" />
+    <PackageReference Include="SoundTouch.Net.NAudioSupport.Core" Version="2.3.2" />
+    <ProjectReference Include="..\Edda.Core\Edda.Core.csproj" />
+    <ProjectReference Include="..\Edda.App\Edda.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Edda.App\Classes\Audio\Adapters\NAudioAudioFileServices.cs" Link="Services\NAudioAudioFileServices.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\Edda.Core\Resources\*.png" Link="Resources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\*.wav" Link="Resources\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\AppIcon.ico" Link="Resources\AppIcon.ico">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+
+    <Content Include="..\Edda.Core\Resources\ffmpeg.exe" Link="Resources\ffmpeg.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

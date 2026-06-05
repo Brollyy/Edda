@@ -364,3 +364,5 @@ FodyWeavers.xsd
 
 # Visual Studio Code config files
 .vscode
+# Local Codex CLI configuration
+.codex/config.toml

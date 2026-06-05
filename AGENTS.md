@@ -1,37 +1,37 @@
 # AGENTS.md
 
-## Project overview
+## Project Overview
 
-Edda is a desktop editor for mapping songs to levels for the VR rhythm game Ragnarock. The application is a Windows desktop application built with .NET and WPF.
+Edda is a desktop editor for mapping songs to levels for the VR rhythm game Ragnarock.
+
+This repository is an Avalonia rewrite of the original Edda application. The current application is cross-platform .NET/Avalonia code; the WPF application has been removed.
 
 The repository currently contains:
-- A WPF desktop application (MainWindow.xaml, Windows/*)
-- Audio processing components using NAudio
-- Mapping and conversion utilities
-
-Future work may include migration toward cross-platform UI frameworks (e.g. Avalonia), but current builds target Windows.
+- An Avalonia desktop application
+- Shared application services
+- Core map editing, audio processing, and conversion logic
+- Application assets and embedded resources
 
 ---
 
-## Repository structure
+## Repository Structure
 
 Key directories:
 
-- `Classes/` — core logic, utilities, map converters, audio playback
-- `Windows/` — WPF UI (MainWindow.xaml, SettingsWindow.xaml, etc.)
-- `Resources/` — application assets
-- `Const/` — constants and settings keys
+- `src/Edda.Avalonia/` — Avalonia desktop UI, windows, platform services, and app entry point
+- `src/Edda.App/` — shared application-level services and adapters
+- `src/Edda.Core/` — core logic, utilities, map converters, audio processing, constants, and resources
 
 Important entry points:
 
-- `Windows/MainWindow.xaml`
-- `Classes/EddaConstants.cs`
+- `src/Edda.Avalonia/Program.cs`
+- `src/Edda.Avalonia/App.cs`
+- `src/Edda.Avalonia/Windows/MainWindow.cs`
+- `src/Edda.Core/Classes/EddaConstants.cs`
 
 ---
 
-## Build instructions
-
-Preferred commands:
+## Build Instructions
 
 Restore dependencies:
 
@@ -39,13 +39,13 @@ Restore dependencies:
 dotnet restore
 ```
 
-Build the project:
+Build the Avalonia application:
 
 ```bash
-dotnet build
+dotnet build src/Edda.Avalonia/Edda.Avalonia.csproj
 ```
 
-If a solution file exists, prefer building the solution:
+If a solution file exists and only includes current projects, building the solution is also acceptable:
 
 ```bash
 dotnet build *.sln
@@ -53,21 +53,16 @@ dotnet build *.sln
 
 ---
 
-## Platform considerations
+## Platform Considerations
 
-- The application currently depends on Windows-only frameworks.
-- WPF UI code lives under `Windows/`.
-- Non-UI code in `Classes/` should remain platform-independent where possible.
-
-When modifying code:
-
-1. Prefer editing shared logic in `Classes/` rather than UI code when possible.
-2. Avoid introducing new Windows-only dependencies in shared components.
-3. Keep UI behavior changes isolated to `Windows/`.
+- Keep shared logic in `src/Edda.Core/` platform-independent where possible.
+- Keep application orchestration and service wiring in `src/Edda.App/`.
+- Keep UI behavior and Avalonia-specific code isolated to `src/Edda.Avalonia/`.
+- Do not introduce Windows-only dependencies unless they are isolated behind platform-specific services.
 
 ---
 
-## Editing guidelines
+## Editing Guidelines
 
 When making changes:
 
@@ -75,6 +70,7 @@ When making changes:
 - Avoid renaming files unless necessary.
 - Follow the existing code style in surrounding files.
 - Do not introduce new packages unless needed.
+- Prefer shared logic changes in `src/Edda.Core/` or `src/Edda.App/` when behavior is not UI-specific.
 
 ---
 
@@ -82,17 +78,13 @@ When making changes:
 
 After making changes:
 
-1. Run `dotnet build`
+1. Run `dotnet build src/Edda.Avalonia/Edda.Avalonia.csproj`.
 2. Ensure no compilation errors occur.
-3. Confirm UI-related changes compile with the WPF project.
-
-If running in a non-Windows environment:
-
-- Only validate compilation of non-WPF logic where possible.
+3. For UI changes, verify the affected Avalonia window or workflow compiles.
 
 ---
 
-## Summary format for pull requests
+## Summary Format For Pull Requests
 
 When submitting changes, summarize work as:
 

@@ -1,20 +1,20 @@
-using System;
-using System.Collections.Generic;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
-using Avalonia;
-using CoreProgram = Edda.Const.Program;
-using Button = Avalonia.Controls.Button;
-using Point = Avalonia.Point;
-using PixelPoint = Avalonia.PixelPoint;
-using AvaloniaColor = Avalonia.Media.Color;
-using AvaloniaBrushes = Avalonia.Media.Brushes;
-using Horizontal = Avalonia.Layout.HorizontalAlignment;
-using Vertical = Avalonia.Layout.VerticalAlignment;
+using System;
+using System.Collections.Generic;
 using System.IO;
+using AvaloniaBrushes = Avalonia.Media.Brushes;
+using AvaloniaColor = Avalonia.Media.Color;
+using Button = Avalonia.Controls.Button;
+using CoreProgram = Edda.Const.Program;
+using Horizontal = Avalonia.Layout.HorizontalAlignment;
+using PixelPoint = Avalonia.PixelPoint;
+using Point = Avalonia.Point;
+using Vertical = Avalonia.Layout.VerticalAlignment;
 
 namespace Edda.Avalonia.Windows;
 

@@ -77,6 +77,23 @@ public class RagnarockMap {
         var res = obj[key];
         return res;
     }
+    private static JObject CreateCustomDataObject() {
+        return new JObject {
+            ["_contributors"] = new JArray(),
+            ["_editors"] = CreateEditorsObject(),
+        };
+    }
+    private static JObject CreateEditorsObject() {
+        return new JObject {
+            [Program.InfoDatEditorName] = CreateEditorVersionObject(),
+            ["_lastEditedBy"] = Program.InfoDatEditorName,
+        };
+    }
+    private static JObject CreateEditorVersionObject() {
+        return new JObject {
+            ["version"] = Program.VersionString,
+        };
+    }
     private void InitInfo() {
         // init info.dat json
         var infoDat = new {
@@ -96,15 +113,7 @@ public class RagnarockMap {
             _coverImageFilename = "",
             _environmentName = BeatmapDefaults.EnvironmentNames[0],
             _songTimeOffset = 0,
-            _customData = new {
-                _contributors = new List<object>(),
-                _editors = new {
-                    Edda = new {
-                        version = Program.VersionString,
-                    },
-                    _lastEditedBy = Program.Name,
-                },
-            },
+            _customData = CreateCustomDataObject(),
             _difficultyBeatmapSets = new[] {
                 new {
                     _beatmapCharacteristicName = BeatmapDefaults.BeatmapCharacteristicName,
@@ -230,35 +239,20 @@ public class RagnarockMap {
 
         // top level custom data
         if (obj["_customData"]?.Type != JTokenType.Object) {
-            var customDataObject = new {
-                _contributors = new List<object>(),
-                _editors = new {
-                    Edda = new {
-                        version = Program.VersionString,
-                    },
-                    _lastEditedBy = "Edda"
-                },
-            };
-            obj["_customData"] = JToken.FromObject(customDataObject);
+            obj["_customData"] = CreateCustomDataObject();
         }
         var customData = obj["_customData"];
         if (customData["_contributors"]?.Type != JTokenType.Array) {
             customData["_contributors"] = JToken.FromObject(new List<string>());
         }
         if (customData["_editors"]?.Type != JTokenType.Object) {
-            var editorsObject = new {
-                Edda = new {
-                    version = Program.VersionString,
-                },
-                _lastEditedBy = "Edda"
-            };
-            customData["_editors"] = JToken.FromObject(editorsObject);
+            customData["_editors"] = CreateEditorsObject();
         }
-        if (customData["_editors"]["Edda"]?.Type != JTokenType.Object) {
-            customData["_editors"]["Edda"] = JToken.FromObject(new { version = Program.DisplayVersionString });
+        if (customData["_editors"][Program.InfoDatEditorName]?.Type != JTokenType.Object) {
+            customData["_editors"][Program.InfoDatEditorName] = CreateEditorVersionObject();
         }
         //if (customData["_editors"]["_lastEditedBy"]?.Type != JTokenType.String) {
-        customData["_editors"]["_lastEditedBy"] = JToken.FromObject("Edda");
+        customData["_editors"]["_lastEditedBy"] = JToken.FromObject(Program.InfoDatEditorName);
         //}
 
         // per beatmap custom data
@@ -324,8 +318,9 @@ public class RagnarockMap {
     }
     private void UpdateEddaVersion() {
         var obj = JObject.Parse(infoStr);
-        obj["_customData"]["_editors"]["Edda"]["version"] = Program.VersionString;
-        obj["_customData"]["_editors"]["_lastEditedBy"] = Program.Name;
+        obj["_customData"]["_editors"][Program.InfoDatEditorName] ??= CreateEditorVersionObject();
+        obj["_customData"]["_editors"][Program.InfoDatEditorName]["version"] = Program.VersionString;
+        obj["_customData"]["_editors"]["_lastEditedBy"] = Program.InfoDatEditorName;
         infoStr = JsonConvert.SerializeObject(obj, Formatting.Indented);
     }
 
@@ -481,7 +476,7 @@ public class RagnarockMap {
     }
     private void ValidateMap(int indx) {
         Dictionary<string, List<JTokenType?>> expectedTypesL1 = new Dictionary<string, List<JTokenType?>> {
-            // The game doesn't actually check for beatmap version - see https://github.com/PKBeam/Edda/issues/143
+            // The game doesn't actually check for beatmap version - see https://github.com/Brollyy/Edda/issues/143
             // {"_version",   stringTypes },
             {"_events",    arrayTypes },
             {"_notes",     arrayTypes },
@@ -524,7 +519,7 @@ public class RagnarockMap {
                             break;
                         case "_lineLayer":
                             // Technically, we should only have notes on layer 1, but the game doesn't complain if the notes are on different layers.
-                            // See https://github.com/PKBeam/Edda/issues/112.
+                            // See https://github.com/Brollyy/Edda/issues/112.
                             if ((int)val != val || val < 0 || 3 < val)
                                 throw ex;
                             break;

@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -12,13 +8,17 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
-using Avalonia.VisualTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Edda.Avalonia.Services;
 using Edda.Classes.MapEditorNS;
 using Edda.Classes.MapEditorNS.NoteNS;
 using Edda.Classes.MapEditorNS.Stats;
 using Edda.Const;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using AvaloniaColor = Avalonia.Media.Color;
 using Button = Avalonia.Controls.Button;
 

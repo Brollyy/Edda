@@ -1,11 +1,11 @@
-using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using NAudio.Vorbis;
 using NAudio.Wave;
 using OpenTK.Audio.OpenAL;
 using SoundTouch.Net.NAudioSupport;
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Edda.Avalonia.Services;
 

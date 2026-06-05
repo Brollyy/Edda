@@ -1,9 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
 using NAudio.Vorbis;
 using NAudio.Wave;
 using OpenTK.Audio.OpenAL;
+using System;
+using System.Collections.Generic;
+using System.IO;
 
 namespace Edda.Avalonia.Services;
 

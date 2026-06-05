@@ -1,4 +1,3 @@
-using System;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -7,10 +6,11 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using System;
+using System.IO;
 using AvaloniaColor = Avalonia.Media.Color;
 using AvaloniaFontStyle = Avalonia.Media.FontStyle;
 using OrientationMode = Avalonia.Layout.Orientation;
-using System.IO;
 
 namespace Edda.Avalonia.Windows;
 

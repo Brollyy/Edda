@@ -1,12 +1,5 @@
 #pragma warning disable CA1416
 
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -16,6 +9,13 @@ using Avalonia.Threading;
 using Edda.Avalonia.Services;
 using Edda.Const;
 using NAudio.Vorbis;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Edda.Avalonia.Windows;
 

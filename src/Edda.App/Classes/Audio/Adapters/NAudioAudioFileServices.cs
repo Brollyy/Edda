@@ -1,6 +1,6 @@
+using NAudio.Vorbis;
 using System;
 using System.IO;
-using NAudio.Vorbis;
 
 namespace Edda;
 

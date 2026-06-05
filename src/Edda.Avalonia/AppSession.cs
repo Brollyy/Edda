@@ -1,14 +1,14 @@
-using Edda.Startup;
-using Edda.Settings;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
-using CoreProgram = Edda.Const.Program;
 using Edda.Avalonia.Services;
 using Edda.Avalonia.Windows;
+using Edda.Settings;
+using Edda.Startup;
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using CoreProgram = Edda.Const.Program;
 
 namespace Edda.Avalonia;
 

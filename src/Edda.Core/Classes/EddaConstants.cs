@@ -334,12 +334,6 @@ namespace Edda.Const {
             public const double StaminaWeight = 0.25;
             public const double RhythmComplexityWeight = 0.20;
             public const double AwkwardnessWeight = 0.15;
-
-            public const double P95Weight = 0.32;
-            public const double MaxWeight = 0.22;
-            public const double TopTenPercentMeanWeight = 0.22;
-            public const double SustainedHighStrainWeight = 0.16;
-            public const double VarianceWeight = 0.08;
         }
         public static class Melchior {
             // These values come from a curve fitting on the available dataset.

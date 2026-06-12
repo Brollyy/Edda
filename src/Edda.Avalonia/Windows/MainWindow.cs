@@ -3858,6 +3858,7 @@ public sealed partial class MainWindow : Window {
         return userSettings.GetValueForKey(UserSettingsKey.DifficultyPredictorAlgorithm) switch {
             Edda.Const.DifficultyPrediction.SupportedAlgorithms.Nytilde => DifficultyPredictorNytilde.SINGLETON,
             Edda.Const.DifficultyPrediction.SupportedAlgorithms.Melchior => DifficultyPredictorMelchior.SINGLETON,
+            Edda.Const.DifficultyPrediction.SupportedAlgorithms.Timeline => DifficultyPredictorTimeline.SINGLETON,
             _ => DifficultyPredictorPKBeam.SINGLETON
         };
     }

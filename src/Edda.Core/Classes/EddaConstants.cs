@@ -319,6 +319,7 @@ namespace Edda.Const {
             public const string PKBeam = "PKBeam_ML";
             public const string Nytilde = "Nytilde_ML";
             public const string Melchior = "Melchior";
+            public const string Timeline = "Timeline";
         }
         public static class Nytilde {
             // These values are based on the dataset used for the ML model training.
@@ -327,6 +328,12 @@ namespace Edda.Const {
             public const double MaxCountNoteDensityPerWindow = 1578.5;
             public const double MaxPeakNoteDensity = 25.5;
             public const double MinTypicalTimeDifference = 0.091463;
+        }
+        public static class Timeline {
+            public const double SpeedWeight = 0.40;
+            public const double StaminaWeight = 0.25;
+            public const double RhythmComplexityWeight = 0.20;
+            public const double AwkwardnessWeight = 0.15;
         }
         public static class Melchior {
             // These values come from a curve fitting on the available dataset.

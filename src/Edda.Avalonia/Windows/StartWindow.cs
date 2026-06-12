@@ -48,6 +48,10 @@ public sealed class StartWindow : Window {
         Background = AvaloniaBrushes.Transparent;
         Position = new PixelPoint(120, 120);
         Title = "Edda";
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "icon.png");
+        if (File.Exists(iconPath)) {
+            Icon = new WindowIcon(iconPath);
+        }
 
         var root = new Grid {
             ColumnDefinitions = new ColumnDefinitions("2*,3*"),

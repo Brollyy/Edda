@@ -29,7 +29,9 @@ internal sealed class ChangeBpmWindow : Window {
         Title = "Timing Settings";
         Width = 300;
         Height = 370;
-        CanResize = false;
+        MinWidth = 300;
+        MinHeight = 370;
+        CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.Parse("#D4D0C8"));
         AutomationHelper.SetAutomationId(this, "ChangeBpmWindow");
@@ -98,21 +100,24 @@ internal sealed class ChangeBpmWindow : Window {
         footer.Child = footerRow;
         root.Children.Add(footer);
 
-        var body = new StackPanel {
+        var body = new Grid {
+            RowDefinitions = new RowDefinitions("Auto,*"),
             Margin = new Thickness(15),
-            Spacing = 10
         };
-        body.Children.Add(new TextBlock {
+        var title = new TextBlock {
             Text = "Timing Changes:",
             Padding = new Thickness(0, 0, 0, 5),
             FontWeight = FontWeight.Bold,
             FontFamily = new FontFamily("Bahnschrift"),
             FontSize = 14
-        });
+        };
+        body.Children.Add(title);
 
         dataGridRoot = AutomationHelper.WithAutomationId(new ContentControl {
             Name = "dataBPMChange",
-            Focusable = true
+            Focusable = true,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
         }, "dataBPMChange");
         dataGridRoot.KeyDown += OnKeyboardTargetKeyDown;
 
@@ -121,23 +126,31 @@ internal sealed class ChangeBpmWindow : Window {
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(10),
-            Height = 200
+            MinHeight = 200,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
         };
 
-        var gridContainer = new StackPanel {
-            Spacing = 8
+        var gridContainer = new Grid {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowSpacing = 8
         };
         gridContainer.Children.Add(BuildHeaderRow());
         gridRowsHost = new StackPanel {
             Spacing = 6
         };
-        gridContainer.Children.Add(new ScrollViewer {
+        var rowsScrollViewer = new ScrollViewer {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
             Content = gridRowsHost
-        });
+        };
+        Grid.SetRow(rowsScrollViewer, 1);
+        gridContainer.Children.Add(rowsScrollViewer);
         gridBorder.Child = gridContainer;
         dataGridRoot.Content = gridBorder;
+        Grid.SetRow(dataGridRoot, 1);
         body.Children.Add(dataGridRoot);
 
         root.Children.Add(body);

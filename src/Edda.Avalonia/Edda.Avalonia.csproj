@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationIcon>..\Edda.Core\Resources\AppIcon.ico</ApplicationIcon>
+    <AssemblyName>Edda</AssemblyName>
+    <Product>Edda</Product>
     <RootNamespace>Edda.Avalonia</RootNamespace>
   </PropertyGroup>
 

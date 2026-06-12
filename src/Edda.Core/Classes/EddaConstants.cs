@@ -17,7 +17,7 @@ namespace Edda.Const {
         public const string InfoDatEditorName = "Edda Avalonia";
         public const string RepositoryURL = "https://github.com/Brollyy/Edda";
         public const string ReleasesAPI = "https://api.github.com/repos/Brollyy/Edda/releases";
-        public const string BaseVersionString = "2.0.0";
+        public const string BaseVersionString = "2.0.0b1";
         public const string VersionString =
 #if DEBUG
             BaseVersionString + "-dev";

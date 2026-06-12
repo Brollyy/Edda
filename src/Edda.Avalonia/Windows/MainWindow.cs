@@ -200,7 +200,7 @@ public sealed partial class MainWindow : Window {
         MinHeight = 450;
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "AppIcon.ico");
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "icon.png");
         if (File.Exists(iconPath)) {
             Icon = new WindowIcon(iconPath);
         }

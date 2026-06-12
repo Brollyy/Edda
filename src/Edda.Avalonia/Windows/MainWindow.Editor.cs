@@ -85,12 +85,14 @@ public sealed partial class MainWindow {
     bool editorLayoutRefreshQueued;
     bool editorPostLayoutRefreshQueued;
     bool suppressNextEditorClick;
+    bool suppressNextEditorRightRelease;
     bool suppressEditorScrollSync;
     bool suppressSpectrogramScrollSync;
     double playbackCanvasScrollOffset = double.NaN;
     Point? editorSelectionStart;
     EditorMarkerDescriptor? editorDraggedMarker;
     Control? editorDraggedMarkerControl;
+    bool editorDraggedMarkerSnapToGrid;
     IPointer? editorCapturedPointer;
     double editorHoveredBeatSnapped;
     double editorHoveredBeatUnsnapped;
@@ -1260,12 +1262,14 @@ public sealed partial class MainWindow {
             (point.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonPressed || point.Properties.IsRightButtonPressed)) {
             var pressedMarkerControl = FindMarkerControlAtPosition(hoverState.position);
             if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { Bookmark: { } bookmark } }) {
+                suppressNextEditorRightRelease = true;
                 BeginEditBookmark(bookmark, hoverState.position);
                 e.Handled = true;
                 return;
             }
             if (pressedMarkerControl is { Tag: EditorMarkerDescriptor { BpmChange: { } bpmChange } } &&
                 TryResolveTimingChangeEditKind(pressedMarkerControl, hoverState.position, out var editKind)) {
+                suppressNextEditorRightRelease = true;
                 BeginEditTimingChange(bpmChange, editKind, hoverState.position);
                 e.Handled = true;
                 return;
@@ -1301,9 +1305,11 @@ public sealed partial class MainWindow {
         if (markerControl is { Tag: EditorMarkerDescriptor descriptor }) {
             editorDraggedMarker = descriptor;
             editorDraggedMarkerControl = markerControl;
+            editorDraggedMarkerSnapToGrid = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         } else {
             editorDraggedMarker = null;
             editorDraggedMarkerControl = null;
+            editorDraggedMarkerSnapToGrid = false;
         }
 
         e.Handled = true;
@@ -1352,7 +1358,8 @@ public sealed partial class MainWindow {
         }
 
         if (editorDraggedMarkerControl != null) {
-            SetMarkerCanvasTop(editorDraggedMarkerControl, GetActiveEditorBeat());
+            editorDraggedMarkerSnapToGrid = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            SetMarkerCanvasTop(editorDraggedMarkerControl, GetEditorMarkerDragBeat());
             suppressNextEditorClick = true;
             e.Handled = true;
             return;
@@ -1372,6 +1379,12 @@ public sealed partial class MainWindow {
         var updateKind = currentPoint.Properties.PointerUpdateKind;
 
         if (updateKind == PointerUpdateKind.RightButtonReleased && !songIsPlaying) {
+            if (suppressNextEditorRightRelease) {
+                suppressNextEditorRightRelease = false;
+                e.Handled = true;
+                return;
+            }
+
             RemoveHoveredNote();
             e.Handled = true;
             return;
@@ -1510,6 +1523,7 @@ public sealed partial class MainWindow {
         editorSelectionStart = null;
         editorDraggedMarker = null;
         editorDraggedMarkerControl = null;
+        editorDraggedMarkerSnapToGrid = false;
         scrollEditorSelection.IsVisible = false;
         UpdateEditorHoverVisuals();
     }
@@ -1549,6 +1563,7 @@ public sealed partial class MainWindow {
             Width = 120,
             Height = 22
         };
+        textBox.SetValue(Visual.ZIndexProperty, 100);
         textBox.GotFocus += (_, _) => textInputHasFocus = true;
         textBox.LostFocus += (_, _) => {
             textInputHasFocus = false;
@@ -1564,8 +1579,7 @@ public sealed partial class MainWindow {
             }
         };
 
-        Canvas.SetLeft(textBox, Math.Clamp(pointerPosition.X, 0, Math.Max(0, GetEditorViewportWidth() - textBox.Width)));
-        Canvas.SetTop(textBox, Math.Clamp(pointerPosition.Y - (textBox.Height / 2), 0, Math.Max(0, GetEditorContentHeight() - textBox.Height)));
+        PositionInlineMarkerTextBox(textBox, pointerPosition);
         scrollEditorCanvas.Children.Add(textBox);
         FocusInlineMarkerTextBox(textBox);
     }
@@ -1583,6 +1597,7 @@ public sealed partial class MainWindow {
             Width = editKind == TimingChangeEditKind.GridDivision ? 44 : 64,
             Height = 22
         };
+        textBox.SetValue(Visual.ZIndexProperty, 100);
         textBox.GotFocus += (_, _) => textInputHasFocus = true;
         textBox.LostFocus += (_, _) => {
             textInputHasFocus = false;
@@ -1596,10 +1611,20 @@ public sealed partial class MainWindow {
             }
         };
 
-        Canvas.SetLeft(textBox, Math.Clamp(pointerPosition.X, 0, Math.Max(0, GetEditorViewportWidth() - textBox.Width)));
-        Canvas.SetTop(textBox, Math.Clamp(pointerPosition.Y - (textBox.Height / 2), 0, Math.Max(0, GetEditorContentHeight() - textBox.Height)));
+        PositionInlineMarkerTextBox(textBox, pointerPosition);
         scrollEditorCanvas.Children.Add(textBox);
         FocusInlineMarkerTextBox(textBox);
+    }
+
+    void PositionInlineMarkerTextBox(TextBox textBox, Point pointerPosition) {
+        var left = Math.Clamp(pointerPosition.X, 0, Math.Max(0, GetEditorViewportWidth() - textBox.Width));
+        var preferredTop = pointerPosition.Y - textBox.Height - 6;
+        var top = preferredTop >= 0
+            ? preferredTop
+            : pointerPosition.Y + 6;
+
+        Canvas.SetLeft(textBox, left);
+        Canvas.SetTop(textBox, Math.Clamp(top, 0, Math.Max(0, GetEditorContentHeight() - textBox.Height)));
     }
 
     void FocusInlineMarkerTextBox(TextBox textBox) {
@@ -1726,7 +1751,7 @@ public sealed partial class MainWindow {
             return;
         }
 
-        var newBeat = Math.Round(GetActiveEditorBeat(), 3);
+        var newBeat = Math.Round(GetEditorMarkerDragBeat(), 3);
         if (editorDraggedMarker.Bookmark != null) {
             mapEditor.RemoveBookmark(editorDraggedMarker.Bookmark);
             editorDraggedMarker.Bookmark.beat = newBeat;
@@ -1744,6 +1769,10 @@ public sealed partial class MainWindow {
 
     Note CreateHoveredNote() {
         return new Note(Math.Round(GetActiveEditorBeat(), 3), editorHoveredColumn);
+    }
+
+    double GetEditorMarkerDragBeat() {
+        return editorDraggedMarkerSnapToGrid ? editorHoveredBeatSnapped : editorHoveredBeatUnsnapped;
     }
 
     void AddNoteAtEditorBeat(int column) {
